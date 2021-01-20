@@ -154,16 +154,13 @@ class Reprojection
 
 		void CreateDeviceMemory( rpVectI pOutSize );
 		void GetCoordinates( double pX, double pY, rpCoordSys pCoordinateSystem, rpVectI pSize, double * pPhaseRA, double * pPhaseDEC );
-		void ReprojectImage( double * pdevInImage, double * pdevOutImage, double * pdevNormalisationPattern, double * pdevPrimaryBeamPattern,
+		void ReprojectImage( float * pdevInImage, float * pdevOutImage, float * pdevNormalisationPattern, float * pdevPrimaryBeamPattern,
 					rpCoordSys pInCoordinateSystem, rpCoordSys pOutCoordinateSystem, rpVectI pInSize, rpVectI pOutSize, bool * pdevInMask,
-					double * pdevBeamIn, double * pdevBeamOut, ProjectionDirection pProjectionDirection,
-					bool pAProjection, bool pVerbose );
-		void ReprojectImage( float * pdevInImage, float * pdevOutImage, double * pdevNormalisationPattern, double * pdevPrimaryBeamPattern,
-					rpCoordSys pInCoordinateSystem, rpCoordSys pOutCoordinateSystem, rpVectI pInSize, rpVectI pOutSize, bool * pdevInMask,
-					double * pdevBeamIn, double * pdevBeamOut, ProjectionDirection pProjectionDirection,
+					float * pdevBeamIn, float * pdevBeamOut, rpVectI pBeamSize, ProjectionDirection pProjectionDirection,
 					bool pAProjection, bool pVerbose );
 		void ReprojectPixel( double * pPixel, int pNumPixels, rpCoordSys pInCoordinateSystem, rpCoordSys pOutCoordinateSystem, rpVectI pInSize, rpVectI pOutSize );
-		void ReweightImage( double * pdevOutImage, double * pdevNormalisationPattern, double * pdevPrimaryBeamPattern, rpVectI pOutSize, bool * pdevOutMask );
+		void ReweightImage( float * pdevOutImage, float * pdevNormalisationPattern, float * pdevPrimaryBeamPattern, rpVectI pOutSize, bool * pdevOutMask,
+					rpVectI pBeamSize );
 
 	private:
 
@@ -259,11 +256,8 @@ class Reprojection
 //	REPROJECTION AND REGRIDDING FUNCTIONS
 //
 
-		void reprojection( double * pdevInImage, double * pdevOutImage, double * pdevNormalisationPattern, double * pdevPrimaryBeamPattern,
-					bool * pdevInMask, double * pdevBeamIn, double * pdevBeamOut, ProjectionDirection pProjectionDirection,
-					bool pAProjection );
-		void reprojection( float * pdevInImage, float * pdevOutImage, double * pdevNormalisationPattern, double * pdevPrimaryBeamPattern,
-					bool * pdevInMask, double * pdevBeamIn, double * pdevBeamOut, ProjectionDirection pProjectionDirection,
+		void reprojection( float * pdevInImage, float * pdevOutImage, float * pdevNormalisationPattern, float * pdevPrimaryBeamPattern,
+					bool * pdevInMask, float * pdevBeamIn, float * pdevBeamOut, rpVectI pBeamSize, ProjectionDirection pProjectionDirection,
 					bool pAProjection );
 
 }; // Reprojection
