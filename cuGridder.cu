@@ -151,9 +151,6 @@ typedef struct VectorI VectorI;
 // telescope.
 telescope _hstTelescope = UNKNOWN_TELESCOPE;
 
-// timing variables - to be deleted.
-double _generateKernel = 0.0, _uploadData = 0.0, _setup = 0.0, _gridding = 0.0, _otherGridding = 0.0;
-
 // debugging parameters.
 bool _hstSaveMosaicDirtyImages = false;	// save the dirty image components of a file mosaic.
 
@@ -175,13 +172,9 @@ int _hstPsfSize = 0;		// the psf size may be smaller than the grid if we're usin
 					//will be selected.
 
 // data parameters.
-//char _hstFieldID[1024] = "\0";
 char ** _hstFieldID = NULL;
-//char _hstDataField[100] = "CORRECTED_DATA";
 char ** _hstDataField = NULL;
-//char _hstSpwRestriction[1024] = "\0";
 char ** _hstSpwRestriction = NULL;
-//char _hstMeasurementSetPath[1024] = "\0";
 char ** _hstMeasurementSetPath = NULL;
 char _hstOutputPrefix[1024] = "output";
 char _hstCacheLocation[1024] = "\0";
@@ -2548,8 +2541,6 @@ __global__ void devGenerateWKernel( cufftComplex * pWKernel, double pW, int pWor
 			//
 			double exponent = (pGridDegrid == GRID ? -1 : +1) * 2.0 * PI * pW * (sqrt( 1.0 - rSquared ) - 1.0);
 			sincosf( exponent, &(kernelValue.y), &(kernelValue.x) );
-//			kernelValue.x = cos( 2.0 * PI * pW * (sqrt( 1.0 - rSquared ) - 1.0) ) * sqrt( 1.0 - rSquared );
-//			kernelValue.y = (pGridDegrid == GRID ? -1 : +1) * sin( 2.0 * PI * pW * (sqrt( 1.0 - rSquared ) - 1.0) ) * sqrt( 1.0 - rSquared );
 
 			// if we are gridding then we multiply the kernel by sqrt( 1.0 - l^2 - m^2 ). If degridding then this is a division.
 			// NOTE: Neither Tim Corwell's paper, or ASKAPsoft, includes the bits below.
@@ -2750,42 +2741,6 @@ __global__ void devCopyImage( float * pNewImage, float * pOldImage, int pNewSize
 	}
 
 } // devCopyImage
-
-//
-//	devSetPrimaryBeamForGriddingAndDegridding()
-//
-//	CJS: 06/09/2019
-//
-//	Sets the primary beam for gridding and degridding.
-//
-
-__global__ void devSetPrimaryBeamForGriddingAndDegridding( float * pImage, int pSize, griddegrid pGridDegrid, bool pAProjection )
-{
-
-	int i = (blockIdx.x * blockDim.x) + threadIdx.x;
-	int j = (blockIdx.y * blockDim.y) + threadIdx.y;
-
-	// ensure we're within the bounds of the image.
-	if (i < pSize && j < pSize)
-	{
-
-		float value = pImage[ (j * pSize) + i ];
-		if (value != 0.0)
-
-			// if we are gridding then we use the primary beam pattern as the kernel. this is so that we adding each field such that it is weighted by its
-			// primary beam.
-			// we then divide the final image by the sum of primary beams squared (beam1^2 + beam2^2 + ... ), which we hold in _hstNormalisationPattern, in order
-			// to correct for our weighting function and also to remove the effect of the primary beam which will naturally be in our image.
-			// if we are degridding then we simply want to reintroduce the primary beam, so we use: val = beam<i>.
-			if (pGridDegrid == GRID && pAProjection == true)
-				value = pow( value, 2 );
-
-		// update the beam.
-		pImage[ (j * pSize) + i ] = value;
-
-	}
-
-} // devSetPrimaryBeamForGriddingAndDegridding
 
 //
 //	devSubtractVisibilities()
@@ -4056,7 +4011,6 @@ void calculateWPlanes( int pMosaicIndex, int pNumSamples, VectorD * phstSample )
 		{
 
 			// set the mean and maximum w values for this plane.
-//			_hstWPlaneMax[ pMosaicIndex ][ i ] = ((maxW - minW) * (i + 1) / _hstWPlanes) + minW;
 			if (i == 0)
 				_hstWPlaneMean[ pMosaicIndex ][ i ] = ((_hstWPlaneMax[ pMosaicIndex ][ i ] - minW) / 2.0) + minW;
 			else
@@ -4146,63 +4100,7 @@ void getASKAPBeamPosition( double * pRA, double * pDEC, double pXOffset, double 
 	*pDEC = asin( vect.v ) * 180.0 / PI;
 	*pRA = asin( -vect.u / cos( asin( vect.v ) ) ) * 180.0 / PI;
 
-//printf( "getASKAPBeamPosition: RA-in, DEC-in <%8.6f, %8.6f>, beamOffset <%8.6f, %8.6f>, RA-out, DEC-out <%8.6f, %8.6f>\n\n", (pCentreRA - 360.0) * PI / 180.0,
-//		pCentreDEC * PI / 180.0, pXOffset, pYOffset, *pRA * PI / 180.0, *pDEC * PI / 180.0 ); // cjs-mod
-
 } // getASKAPBeamPosition
-
-//void getASKAPBeamPosition( double * pRA, double * pDEC, int pBeamIndex, double pCentreRA, double pCentreDEC )
-//{
-
-	// get the ra and dec offset depending upon which beam this is.
-//	double raOffset = 0, decOffset = 0;
-//	switch (pBeamIndex)
-//	{
-//		case 0:	raOffset = 0.0432086; decOffset = -0.0340456; break; // raOffset = -0.0096172; decOffset = 0.0019379; break;
-//		case 1:	raOffset = 0.0274913; decOffset = -0.0340267; break; // raOffset = 0.0028024; decOffset = 0.0088222; break;
-//		case 2:	raOffset = 0.0117808; decOffset = -0.0340162; break; // raOffset = -0.0023984; decOffset = -0.0110852; break;
-//		case 3:	raOffset = -0.00392684; decOffset = -0.0340141; break; // raOffset = 0.0100212; decOffset = -0.0042009; break;
-//		case 4:	raOffset = -0.0196354; decOffset = -0.0340204; break; // raOffset = -0.0292557; decOffset = 0.0080766; break;
-//		case 5:	raOffset = -0.0353488; decOffset = -0.0340351; break; // raOffset = -0.0168361; decOffset = 0.0149609; break;
-//		case 6:	raOffset = 0.0353488; decOffset = -0.0204186; break; // raOffset = -0.0044165; decOffset = 0.0218452; break;
-//		case 7:	raOffset = 0.0196354; decOffset = -0.0204098; break; // raOffset = 0.0080031; decOffset = 0.0287295; break;
-//		case 8:	raOffset = 0.00392684; decOffset = -0.020406; break; // raOffset = 0.0152220; decOffset = 0.0157064; break;
-//		case 9:	raOffset = -0.0117808; decOffset = -0.0204073; break; // raOffset = 0.0224408; decOffset = 0.0026834; break;
-//		case 10:	raOffset = -0.0274913; decOffset = -0.0204136; break; // raOffset = 0.0296596; decOffset = -0.0103397; break;
-//		case 11:	raOffset = -0.0432086; decOffset = -0.0204249; break; // raOffset = 0.0172400; decOffset = -0.0172240; break;
-//		case 12:	raOffset = 0.0432086; decOffset = -0.00680788; break; // raOffset = 0.0048204; decOffset = -0.0241083; break;
-//		case 13:	raOffset = 0.0274913; decOffset = -0.0068041; break; // raOffset = -0.0075992; decOffset = -0.0309926; break;
-//		case 14:	raOffset = 0.0117808; decOffset = -0.006802; break; // raOffset = -0.0148180; decOffset = -0.0179695; break;
-//		case 15:	raOffset = -0.00392684; decOffset = -0.00680158; break; // raOffset = -0.0220368; decOffset = -0.0049464; break;
-//		case 16:	raOffset = -0.0196354; decOffset = -0.00680284; break; // raOffset = -0.0488941; decOffset = 0.0142154; break;
-//		case 17:	raOffset = -0.0353488; decOffset = -0.00680578; break; // raOffset = -0.0364745; decOffset = 0.0210997; break;
-//		case 18:	raOffset = 0.0353488; decOffset = 0.00680578; break; // raOffset = -0.0240549; decOffset = 0.0279840; break;
-//		case 19:	raOffset = 0.0196354; decOffset = 0.00680284; break; // raOffset = -0.0116353; decOffset = 0.0348683; break;
-//		case 20:	raOffset = 0.00392684; decOffset = 0.00680158; break; // raOffset = 0.0007843; decOffset = 0.0417526; break;
-//		case 21:	raOffset = -0.0117808; decOffset = 0.006802; break; // raOffset = 0.0132039; decOffset = 0.0486369; break;
-//		case 22:	raOffset = -0.0274913; decOffset = 0.0068041; break; // raOffset = 0.0204227; decOffset = 0.0356138; break;
-//		case 23:	raOffset = -0.0432086; decOffset = 0.00680788; break; // raOffset = 0.0276416; decOffset = 0.0225907; break;
-//		case 24:	raOffset = 0.0432086; decOffset = 0.0204249; break; // raOffset = 0.0348604; decOffset = 0.0095677; break;
-//		case 25:	raOffset = 0.0274913; decOffset = 0.0204136; break; // raOffset = 0.0420792; decOffset = -0.0034554; break;
-//		case 26:	raOffset = 0.0117808; decOffset = 0.0204073; break; // raOffset = 0.0492980; decOffset = -0.0164785; break;
-//		case 27:	raOffset = -0.00392684; decOffset = 0.020406; break; // raOffset = 0.0368784; decOffset = -0.0233628; break;
-//		case 28:	raOffset = -0.0196354; decOffset = 0.0204098; break; // raOffset = 0.0244588; decOffset = -0.0302471; break;
-//		case 29:	raOffset = -0.0353488; decOffset = 0.0204186; break; // raOffset = 0.0120392; decOffset = -0.0371314; break;
-//		case 30:	raOffset = 0.0353488; decOffset = 0.0340351; break; // raOffset = -0.0003804; decOffset = -0.0440157; break;
-//		case 31:	raOffset = 0.0196354; decOffset = 0.0340204; break; // raOffset = -0.0128000; decOffset = -0.0509000; break;
-//		case 32:	raOffset = 0.00392684; decOffset = 0.0340141; break; // raOffset = -0.0200188; decOffset = -0.0378769; break;
-//		case 33:	raOffset = -0.0117808; decOffset = 0.0340162; break; // raOffset = -0.0272376; decOffset = -0.0248538; break;
-//		case 34:	raOffset = -0.0274913; decOffset = 0.0340267; break; // raOffset = -0.0344564; decOffset = -0.0118307; break;
-//		case 35:	raOffset = -0.0432086; decOffset = 0.0340456; break; // raOffset = -0.0416753; decOffset = 0.0011923; break;
-//	}
-
-	// 6:  - 0.001385355, - 0.000621774
-	// 12: - 0.002170753, - 0.000119991
-
-//	*pRA = -(deg( raOffset ) / cos( rad( pCentreDEC ) )) + pCentreRA;
-//	*pDEC = deg( decOffset ) + pCentreDEC;
-
-//} // getASKAPBeamPosition
 
 //
 //	doPhaseCorrectionSamples()
@@ -4779,9 +4677,6 @@ bool generateKernel( int pW, int pA, bool pWProjection, bool pAProjection, int *
 
 	// for beam mosaicing we need to do some primary beam correction using the average (mosaic) primary beam. we only have to do this for degridding if we're not
 	// using A-projection.
-// cjs-mod	bool doBeamCorrection = (phstPrimaryBeamMosaicing != NULL && (pGridDegrid == GRID || pAProjection == false));
-// cjs-mod	bool doBeamCorrection = (phstPrimaryBeamMosaicing != NULL && ((pGridDegrid == GRID && pAProjection == true) || (pGridDegrid == DEGRID && pAProjection == false)));
-// cjs-mod	bool doBeamCorrection = (phstPrimaryBeamMosaicing != NULL && (pGridDegrid == GRID || (pGridDegrid == DEGRID && pAProjection == false)));
 	bool doBeamCorrection = (phstPrimaryBeamMosaicing != NULL && ((pGridDegrid == GRID && pAProjection == true) || (pGridDegrid == DEGRID && pAProjection == false)));
 
 	int numberOfWorkspacesRequired = 1;
@@ -4816,11 +4711,6 @@ bool generateKernel( int pW, int pA, bool pWProjection, bool pAProjection, int *
 		workspaceSize = MAX_WORKSPACE_SIZE;
 	oversampledWorkspaceSize = workspaceSize * pOversample;
 
-	// display warning if the workspace size is too low.
-//	if (workspaceSize <= 125)
-//		printf( "\n! WARNING: The workspace size is set to %i x %i, which is too low. Reducing the oversampling parameter might help.\n\n", workspaceSize,
-//				workspaceSize );
-
 	// if we are using beam mosaicing then we need to correct the image for the primary beam, and weight the image for mosaicing.
 	cufftComplex * devBeamCorrection = NULL;
 	if (doBeamCorrection == true)
@@ -4832,14 +4722,6 @@ bool generateKernel( int pW, int pA, bool pWProjection, bool pAProjection, int *
 					"declaring device memory for primary beam" );
 		moveHostToDevice( (void *) devPrimaryBeam, (void *) phstPrimaryBeamMosaicing, _hstBeamSize * _hstBeamSize * sizeof( float ),
 					"copying primary beam to the device" );
-
-		// set the primary beam during gridding and degridding. we tell this subroutine if we're using A-projection or not because in the absence of A-projection
-		// we will need to correct for the primary beam function using same average beam that we use to weight the mosaic.
-		setThreadBlockSize2D( _hstBeamSize, _hstBeamSize );
-// cjs-mod		devSetPrimaryBeamForGriddingAndDegridding<<< _gridSize2D, _blockSize2D >>>(	/* pImage = */ devPrimaryBeam,
-//												/* pSize = */ _hstBeamSize,
-//												/* pGridDegrid = */ pGridDegrid,
-//												/* pAProjection = */ pAProjection );
 
 		// create the kernel and clear it.
 		reserveGPUMemory( (void **) &devBeamCorrection, workspaceSize * workspaceSize * sizeof( cufftComplex ),
@@ -4858,21 +4740,6 @@ bool generateKernel( int pW, int pA, bool pWProjection, bool pAProjection, int *
 		// free the primary beam.
 		if (devPrimaryBeam != NULL)
 			cudaFree( (void *) devPrimaryBeam );
-
-//if (pA == 0)
-//{
-
-//float * tmpKernel = (float *) malloc( workspaceSize * workspaceSize * sizeof( cufftComplex ) );
-//cudaMemcpy( tmpKernel, devBeamCorrection, workspaceSize * workspaceSize * sizeof( cufftComplex ), cudaMemcpyDeviceToHost );
-//for ( long int i = 0; i < (long int) workspaceSize * (long int) workspaceSize; i++ )
-//	tmpKernel[ i ] = tmpKernel[ i * 2 ];
-//char kernelFilename[100];
-//sprintf( kernelFilename, "beam-correction-%i-%i-%i.image", pFieldID, pA, (pGridDegrid == GRID ? 0 : 1) );
-//_hstCasacoreInterface.WriteCasaImage( kernelFilename, workspaceSize, workspaceSize, _hstOutputRA,
-//					_hstOutputDEC, _hstCellSize, tmpKernel, CONST_C / _hstAverageWavelength[ pMosaicIndex ], NULL );
-//free( tmpKernel );
-
-//}
 
 	}
 
@@ -4927,20 +4794,6 @@ bool generateKernel( int pW, int pA, bool pWProjection, bool pAProjection, int *
 		if (devPrimaryBeam != NULL)
 			cudaFree( (void *) devPrimaryBeam );
 
-//if (pA == 0)
-//{
-
-//float * tmpKernel = (float *) malloc( workspaceSize * workspaceSize * sizeof( cufftComplex ) );
-//cudaMemcpy( tmpKernel, devAKernel, workspaceSize * workspaceSize * sizeof( cufftComplex ), cudaMemcpyDeviceToHost );
-//for ( long int i = 0; i < (long int) workspaceSize * (long int) workspaceSize; i++ )
-//	tmpKernel[ i ] = tmpKernel[ i * 2 ];
-//char kernelFilename[100];
-//sprintf( kernelFilename, "a-kernel-%i-%i-%i-%i.image", pMosaicIndex, pFieldID, pA, (pGridDegrid == GRID ? 0 : 1) );
-//_hstCasacoreInterface.WriteCasaImage( kernelFilename, workspaceSize, workspaceSize, _hstOutputRA,
-//					_hstOutputDEC, _hstCellSize, tmpKernel, CONST_C / _hstAverageWavelength[ pMosaicIndex ], NULL );
-//free( tmpKernel );
-
-//}
 	}
 	
 	// reserve some memory for the AA kernel and clear it.
@@ -4953,10 +4806,6 @@ bool generateKernel( int pW, int pA, bool pWProjection, bool pAProjection, int *
 		printf( "Unknown CUDA error in generateKernel() (%s)\n", cudaGetErrorString( err ) );
 
 	// generate the AA-kernel on the GPU.
-//	setThreadBlockSize2D( _hstAAKernelSize, _hstAAKernelSize );
-//	devGenerateAAKernel<<< _gridSize2D, _blockSize2D >>>(	/* pAAKernel = */ devAAKernel,
-//								/* pKernelSize = */ _hstAAKernelSize,
-//								/* pWorkspaceSize = */ workspaceSize );
 	int aaKernelSize = (int) ceil( sqrt( 2 * workspaceSize * workspaceSize ) );
 	if (aaKernelSize % 2 == 0)
 		aaKernelSize++;
@@ -4967,44 +4816,10 @@ bool generateKernel( int pW, int pA, bool pWProjection, bool pAProjection, int *
 	err = cudaGetLastError();
 	if (err != cudaSuccess)
 		printf( "error generating AA kernel (%s)\n", cudaGetErrorString( err ) );
-//{
-
-//float * tmpKernel = (float *) malloc( workspaceSize * workspaceSize * sizeof( cufftComplex ) );
-//cudaMemcpy( tmpKernel, devAAKernel, workspaceSize * workspaceSize * sizeof( cufftComplex ), cudaMemcpyDeviceToHost );
-//for ( long int i = 0; i < (long int) workspaceSize * (long int) workspaceSize; i++ )
-//	tmpKernel[ i ] = tmpKernel[ i * 2 ];
-//char kernelFilename[100];
-//sprintf( kernelFilename, "aa-kernel.image" );
-//_hstCasacoreInterface.WriteCasaImage( kernelFilename, workspaceSize, workspaceSize, _hstOutputRA,
-//					_hstOutputDEC, _hstCellSize, tmpKernel, CONST_C / _hstAverageWavelength[ pMosaicIndex ], NULL );
-//free( tmpKernel );
-
-//}
-
-	// we will need the AA-kernel to be in the image domain. FFT the AA-kernel.
-//	performFFT(	/* pdevGrid = */ &devAAKernel,
-//			/* pSize = */ workspaceSize,
-//			/* pFFTDirection = */ INVERSE,
-//			/* pFFTPlan = */ -1,
-//			/* pFFType = */ C2C );
 
 	// create a kernel workspace to store the image-plane kernel.
 	cufftComplex * devImagePlaneKernel = NULL;
 	reserveGPUMemory( (void **) &devImagePlaneKernel, workspaceSize * workspaceSize * sizeof( cufftComplex ), "declaring device memory for image-plane kernel" );
-
-//{
-
-//float * tmpKernel = (float *) malloc( workspaceSize * workspaceSize * sizeof( cufftComplex ) );
-//cudaMemcpy( tmpKernel, devBeamCorrection, workspaceSize * workspaceSize * sizeof( cufftComplex ), cudaMemcpyDeviceToHost );
-//for ( long int i = 0; i < (long int) workspaceSize * (long int) workspaceSize; i++ )
-//	tmpKernel[ i ] = tmpKernel[ i * 2 ];
-//char kernelFilename[100];
-//sprintf( kernelFilename, "beam-correction-%i.image", pFieldID );
-//_hstCasacoreInterface.WriteCasaImage( kernelFilename, workspaceSize, workspaceSize, _hstOutputRA,
-//					_hstOutputDEC, _hstCellSize, tmpKernel, CONST_C / _hstAverageWavelength[ pMosaicIndex ], NULL );
-//free( tmpKernel );
-
-//}
 
 	// we now work with the whole workspace.
 	setThreadBlockSize2D( workspaceSize, workspaceSize );
@@ -5023,23 +4838,6 @@ bool generateKernel( int pW, int pA, bool pWProjection, bool pAProjection, int *
 	// are we using beam correction ? Convolve with the kernel.
 	if (doBeamCorrection == true)
 		devMultiplyImages<<< _gridSize2D, _blockSize2D >>>( devImagePlaneKernel, devBeamCorrection, workspaceSize );
-
-//if (pW == 0)
-//{
-
-//float * tmpKernel = (float *) malloc( workspaceSize * workspaceSize * sizeof( cufftComplex ) );
-//cudaMemcpy( tmpKernel, devImagePlaneKernel, workspaceSize * workspaceSize * sizeof( cufftComplex ), cudaMemcpyDeviceToHost );
-//for ( long int i = 0; i < (long int) workspaceSize * (long int) workspaceSize; i++ )
-//	tmpKernel[ i ] = tmpKernel[ i * 2 ];
-//char kernelFilename[100];
-//sprintf( kernelFilename, "combined-kernel-%i-%i-%i.image", pFieldID, pA, (pGridDegrid == GRID ? 0 : 1) );
-//sprintf( kernelFilename, "combined-kernel-w%i-g%i.image", pW, (pGridDegrid == GRID ? 0 : 1) );
-//sprintf( kernelFilename, "combined-kernel-%i.image", (pGridDegrid == GRID ? 0 : 1) );
-//_hstCasacoreInterface.WriteCasaImage( kernelFilename, workspaceSize, workspaceSize, _hstOutputRA,
-//					_hstOutputDEC, _hstCellSize, tmpKernel, CONST_C / _hstAverageWavelength[ pMosaicIndex ], NULL );
-//free( tmpKernel );
-
-//}
 
 	// reserve some memory for the combined kernel, and clear it.
 	cufftComplex * devCombinedKernel = NULL;
@@ -5113,42 +4911,15 @@ bool generateKernel( int pW, int pA, bool pWProjection, bool pAProjection, int *
 	if (maximumSupportSize > _hstKernelCutoffSupport)
 		maximumSupportSize = _hstKernelCutoffSupport;
 
-	// if the required kernel size is larger than the maximum kernel size then display a warning.
-//	if (maximumSupportSize < supportSize)
-//		printf( "\n! WARNING: The maximum kernel support is set to %i x %i, which is too low (require %i x %i). Try reducing the oversampling parameter\n\n",
-//									maximumSupportSize, maximumSupportSize, supportSize, supportSize );
-
 	// restrict support based upon the workspace size.
 	if (supportSize > maximumSupportSize)
 	{
 		supportSize = maximumSupportSize;
 		*pKernelOverflow = true;
 	}
-//printf( "maximumSupportSize %i, supportSize %i\n", maximumSupportSize, supportSize );
-
-//if (pWProjection == true || pAProjection == true) // cjs-mod
-//	supportSize = 25; // cjs-mod
 
 	// calculate kernel size.
 	*phstKernelSize = (supportSize * 2) + 1;
-
-//if (pW == 0)
-//{
-
-//float * tmpKernel = (float *) malloc( oversampledWorkspaceSize * oversampledWorkspaceSize * sizeof( cufftComplex ) );
-//cudaMemcpy( tmpKernel, devCombinedKernel, oversampledWorkspaceSize * oversampledWorkspaceSize * sizeof( cufftComplex ), cudaMemcpyDeviceToHost );
-//for ( long int i = 0; i < (long int) oversampledWorkspaceSize * (long int) oversampledWorkspaceSize; i++ )
-//	tmpKernel[ i ] = tmpKernel[ i * 2 ];
-//char kernelFilename[100];
-//if (pMosaicIndex == -1)
-//	sprintf( kernelFilename, "kernelW2-%i-%i.image", pW, (pGridDegrid == GRID ? 0 : 1) );
-//else
-//	sprintf( kernelFilename, "kernelW2-%i-%i-%i.image", pFieldID, pW, (pGridDegrid == GRID ? 0 : 1) );
-//_hstCasacoreInterface.WriteCasaImage( kernelFilename, oversampledWorkspaceSize, oversampledWorkspaceSize, _hstOutputRA,
-//					_hstOutputDEC, _hstCellSize / 8.0, tmpKernel, CONST_C / _hstAverageWavelength[ pMosaicIndex ], NULL );
-//free( tmpKernel );
-
-//}
 
 	// kernel data on the device.
 	reserveGPUMemory( (void **) pdevKernelPtr, *phstKernelSize * *phstKernelSize * pOversample * pOversample * sizeof( cufftComplex ),
@@ -5195,7 +4966,6 @@ bool generateKernel( int pW, int pA, bool pWProjection, bool pAProjection, int *
 	// domain:
 	// The normalisation factor, N_i, will be different for each field, and we find the lowest N_i, which we call N_min and hold in _griddedVisibilitiesForBeamMosaic,
 	// and take it out as a factor. We correct for N_min in the image domain, and here we will correct for N_i / N_min.
-//	if (pFieldID >= 0 && pGridDegrid == GRID)
 	if (phstPrimaryBeamMosaicing != NULL && pGridDegrid == GRID && _hstBeamMosaic == true)
 		devNormalise<<< blocks, threads>>>(	devKernel,
 							(double) _hstGriddedVisibilitiesPerField[ pFieldID ] / (double) _griddedVisibilitiesForBeamMosaic,
@@ -5204,31 +4974,6 @@ bool generateKernel( int pW, int pA, bool pWProjection, bool pAProjection, int *
 		devNormalise<<< blocks, threads>>>(	devKernel,
 							(double) _hstGriddedVisibilities[ pMosaicIndex ] / (double) _griddedVisibilitiesForBeamMosaic,
 							*phstKernelSize * *phstKernelSize * pOversample * pOversample );
-
-//140819
-//	if (pFieldID == 0)
-//	{
-//		float * tmpKernel = (float *) malloc( *phstKernelSize * *phstKernelSize * sizeof( cufftComplex ) );
-//		for ( int oversampleI = 0; oversampleI < pOversample; oversampleI++ )
-//			for ( int oversampleJ = 0; oversampleJ < pOversample; oversampleJ++ )
-//			{
-//				
-//				// get the index of the oversampled kernels. no need to add the index of the w-kernel because
-//				// we're putting them in separate arrays.
-//				long int kernelIdx = ((long int)oversampleI * (long int)*phstKernelSize * (long int)*phstKernelSize) +
-//							((long int)oversampleJ * (long int)*phstKernelSize * (long int)*phstKernelSize * (long int)pOversample);
-//
-//				cudaMemcpy( tmpKernel, &devKernel[ kernelIdx ], *phstKernelSize * *phstKernelSize * sizeof( cufftComplex ), cudaMemcpyDeviceToHost );
-//				for ( long int i = 0; i < *phstKernelSize * *phstKernelSize; i++ )
-//					tmpKernel[ i ] = tmpKernel[ i * 2 ];
-//				char kernelFilename[100];
-//				sprintf( kernelFilename, "kernel-%li-%i-%i.image", kernelIdx, pW, (pGridDegrid == GRID ? 0 : 1) );
-//				_hstCasacoreInterface.WriteCasaImage( kernelFilename, *phstKernelSize, *phstKernelSize, _hstOutputRA,
-//						_hstOutputDEC, _hstCellSize, tmpKernel, CONST_C / _hstAverageWavelength[ pMosaicIndex ], NULL );
-//
-//			}
-//		free( tmpKernel );
-//	}
 	
 	// cleanup memory.
 	if (devWKernel != NULL)
@@ -5329,7 +5074,6 @@ void getParameters( char * pParameterFile )
 			minMeasurementSet = _hstMeasurementSets - 1;
 			maxMeasurementSet = _hstMeasurementSets - 1;
 
-//			strcpy( _hstMeasurementSetPath, params );
 		}
 		else if (strcmp( par, FIELD_ID ) == 0 && _hstMeasurementSets > 0)
 		{
@@ -5338,7 +5082,6 @@ void getParameters( char * pParameterFile )
 			if (minMeasurementSet >= 0 && maxMeasurementSet >= 0)
 				for ( int i = minMeasurementSet; i <= maxMeasurementSet; i++ )
 					strcpy( _hstFieldID[ i ], params );
-//			strcpy( _hstFieldID, params );
 
 		}
 		else if (strcmp( par, SPW ) == 0 && _hstMeasurementSets > 0)
@@ -5348,7 +5091,6 @@ void getParameters( char * pParameterFile )
 			if (minMeasurementSet >= 0 && maxMeasurementSet >= 0)
 				for ( int i = minMeasurementSet; i <= maxMeasurementSet; i++ )
 					strcpy( _hstSpwRestriction[ i ], params );
-//			strcpy( _hstSpwRestriction, params );
 
 		}
 		else if (strcmp( par, DATA_FIELD ) == 0 && _hstMeasurementSets > 0)
@@ -5358,7 +5100,6 @@ void getParameters( char * pParameterFile )
 			if (minMeasurementSet >= 0 && maxMeasurementSet >= 0)
 				for ( int i = minMeasurementSet; i <= maxMeasurementSet; i++ )
 					strcpy( _hstDataField[ i ], params );
-//			strcpy( _hstDataField, params );
 
 		}
 		else if (strcmp( par, TABLE_DATA ) == 0 && _hstMeasurementSets > 0)
@@ -5535,8 +5276,6 @@ void gridVisibilities(	cufftComplex ** pdevGrid,		// data area (device) holding 
 	
 	cudaError_t err;
 
-struct timespec otherStart, otherEnd;
-
 	err = cudaGetLastError();
 	if (err != cudaSuccess)
 		printf( "unknown CUDA error in gridVisibilities() [i] (%s)\n", cudaGetErrorString( err ) );
@@ -5592,9 +5331,6 @@ struct timespec otherStart, otherEnd;
 				if (numVisibilities > 0)
 				{
 
-struct timespec setupStart, setupEnd;
-clock_gettime( CLOCK_REALTIME, &setupStart );
-
 					// set the cuda device, and wait for whatever is running to finish.
 					if (pNumGPUs > 1)
 						cudaSetDevice( _hstGPU[ cudaDeviceIndex ] );
@@ -5633,12 +5369,6 @@ clock_gettime( CLOCK_REALTIME, &setupStart );
 					// create an array of kernel pointers for each field, and an array to store the sizes.
 					cufftComplex ** devFieldKernelPtr = (cufftComplex **) malloc( numFields * sizeof( cufftComplex * ) );
 					int * hstFieldKernelSize = (int *) malloc( numFields * sizeof( int ) );
-
-clock_gettime( CLOCK_REALTIME, &setupEnd );
-_setup += getTime( setupStart, setupEnd );
-
-struct timespec kernelStart, kernelEnd;
-clock_gettime( CLOCK_REALTIME, &kernelStart );
 
 					cufftComplex * devWorkspace = NULL;
 					bool kernelOverflow = false;
@@ -5732,9 +5462,6 @@ clock_gettime( CLOCK_REALTIME, &kernelStart );
 					if (hstFieldKernelSize != NULL)
 						free( (void *) hstFieldKernelSize );
 
-clock_gettime( CLOCK_REALTIME, &kernelEnd );
-_generateKernel += getTime( kernelStart, kernelEnd );
-
 					// ensure we don't report old errors.
 					err = cudaGetLastError();
 					if (err != cudaSuccess)
@@ -5793,10 +5520,6 @@ _generateKernel += getTime( kernelStart, kernelEnd );
 
 					}
 
-//					err = cudaGetLastError();
-//					if (err != cudaSuccess)
-//						printf( "error gridding visibilities on device (%s)\n", cudaGetErrorString( err ) );
-
 					// use the next lot of visibilities.
 					hstNextVisibility[ cudaDeviceIndex ] += numVisibilities;
 					latestGPU = cudaDeviceIndex;
@@ -5817,8 +5540,6 @@ _generateKernel += getTime( kernelStart, kernelEnd );
 		
 		} // LOOP: kernelSet
 
-clock_gettime( CLOCK_REALTIME, &otherStart );
-
 		// clear the kernels if they exist.
 		for ( int gpu = 0; gpu < pNumGPUs; gpu++ )
 		{
@@ -5830,9 +5551,6 @@ clock_gettime( CLOCK_REALTIME, &otherStart );
 				devKernel[ gpu ] = NULL;
 			}
 		} // LOOP: gpu
-
-clock_gettime( CLOCK_REALTIME, &otherEnd );
-_otherGridding += getTime( otherStart, otherEnd );
 
 		// reset the GPU to the first device.
 		if (pNumGPUs > 1)
@@ -6002,9 +5720,9 @@ bool generateImageOfConvolutionFunction( char * pDeconvolutionFilename )
 	int * tmphstVisibilitiesPerKernelSet = (int *) malloc( sizeof( int ) );
 	tmphstVisibilitiesPerKernelSet[ 0 ] = 1;
 
-err = cudaGetLastError();
-if (err != cudaSuccess)
-	printf( "unknown CUDA error on line %d (%s)\n", __LINE__, cudaGetErrorString( err ) );
+	err = cudaGetLastError();
+	if (err != cudaSuccess)
+		printf( "unknown CUDA error on line %d (%s)\n", __LINE__, cudaGetErrorString( err ) );
 		
 	// generate the deconvolution function by gridding a single visibility without w-projection
 	// (mirror visibilities = false, use conjugate values = false).
@@ -6034,9 +5752,9 @@ if (err != cudaSuccess)
 	if (tmphstVisibilitiesPerKernelSet != NULL)
 		free( (void *) tmphstVisibilitiesPerKernelSet );
 
-err = cudaGetLastError();
-if (err != cudaSuccess)
-	printf( "unknown CUDA error on line %d (%s)\n", __LINE__, cudaGetErrorString( err ) );
+	err = cudaGetLastError();
+	if (err != cudaSuccess)
+		printf( "unknown CUDA error on line %d (%s)\n", __LINE__, cudaGetErrorString( err ) );
 
 	// FFT the gridded data to get the deconvolution map.
 	performFFT(	/* pdevGrid = */ &devDeconvolutionImageGrid,
@@ -6747,23 +6465,6 @@ bool cottonSchwabClean( double * phstPhaseCentre, char * pFilenamePrefix, float 
 		if (devComponentPos != NULL)
 			cudaFree( (void *) devComponentPos );
 
-//{
-//char modelImageFilename[100];
-//sprintf( modelImageFilename, "model-image.image" );
-//float * hstModelImage = (float *) malloc( (long int) _hstUvPixels * (long int) _hstUvPixels * (long int) sizeof( float ) );
-//moveDeviceToHost( (void *) hstModelImage, (void *) devModelImage[ 0 ], (long int) _hstUvPixels * (long int) _hstUvPixels * (long int) sizeof( float ), "moving model image to host" );
-//_hstCasacoreInterface.WriteCasaImage(	/* pFilename = */ modelImageFilename,
-//					/* pWidth = */ _hstUvPixels,
-//					/* pHeight = */ _hstUvPixels,
-//					/* pRA = */ _hstOutputRA,
-//					/* pDec = */ _hstOutputDEC,
-//					/* pPixelSize = */ _hstCellSize,
-//					/* pImage = */ hstModelImage,
-//					/* pFrequency = */ CONST_C / _hstAverageWavelength[ 0 ],
-//					/* pMask = */ phstMask );
-//free( (void *) hstModelImage );
-//}
-
 		// do we need to reintroduce the primary beam pattern ? the reason this may be needed is because we have multiplied our mosaic by the primary beam pattern to
 		// suppress flux around the edges that is only covered by one beam. but we need the model visibilities to model the flux PRIOR to the primary-beam-pattern
 		// correction or we will keep cleaning out the same flux with every major cycle.
@@ -7141,8 +6842,6 @@ bool cottonSchwabClean( double * phstPhaseCentre, char * pFilenamePrefix, float 
 							devSubtractVisibilities<<< blocks, threads >>>(	/* pOriginalVisibility = */ devOriginalVisibilities[ gpu ],
 													/* pModelVisibility = */ devModelVisibilities[ gpu ],
 													/* pItems = */ hstNextVisibility[ gpu ] );
-//							cudaMemcpy( devModelVisibilities[ gpu ], devOriginalVisibilities[ gpu ],
-//									hstNextVisibility[ gpu ] * sizeof( cufftComplex ), cudaMemcpyDeviceToDevice );
 
 						}
 					if (_hstNumGPUs > 1)
@@ -8537,7 +8236,6 @@ void loadPrimaryBeam( char * pBeamFilename, float ** phstPrimaryBeamIn, int pSiz
 		// loop over the expected number of pixels.
 		char * current = fileData, * next;
 		for ( int j = 0; j < pSize; j++ )
-//			for ( int i = pSize - 1; i >= 0; i-- )
 			for ( int i = 0; i < pSize; i++ )
 			{
 				(*phstPrimaryBeamIn)[ (j * pSize) + i ] = strtod( current, &next );
@@ -8611,12 +8309,6 @@ void imagePlaneReprojectPrimaryBeam( float * phstPrimaryBeamIn, float * phstPrim
 	outCoordSystem.cd = tmpCDOut;
 	outCoordSystem.epoch = Reprojection::EPOCH_J2000;
 
-	// determine how much free memory is available.
-//	size_t freeMem = 0, totalMem = 0;
-//	cudaError_t err = cudaMemGetInfo( &freeMem, &totalMem );
-//	if (err == cudaSuccess)
-//		printf( "Memory free: %li MB from %li MB\n", freeMem / (1024 * 1024), totalMem / (1024 * 1024) );
-
 	// copy the primary beam into a temporary work location.
 	cudaMemcpy( pdevInBeam, phstPrimaryBeamIn, _hstBeamSize * _hstBeamSize * sizeof( float ), cudaMemcpyHostToDevice );
 
@@ -8648,19 +8340,6 @@ void imagePlaneReprojectPrimaryBeam( float * phstPrimaryBeamIn, float * phstPrim
 	for ( int i = 0; i < _hstBeamSize * _hstBeamSize; i++ )
 		if (abs( phstPrimaryBeamOut[ i ] ) < 0.001)
 			phstPrimaryBeamOut[ i ] = 0.0;
-
-	// save the reprojected beam.
-//	char beamFilename[100];
-//	sprintf( beamFilename, "beam-%i-%f-%f.image", pBeam, pOutRA, pOutDec );
-//	_hstCasacoreInterface.WriteCasaImage( beamFilename, _hstBeamSize, _hstBeamSize, pOutRA, pOutDec,
-//						_hstCellSize * (double) _hstUvPixels / (double) _hstBeamSize, phstPrimaryBeamOut,
-//						CONST_C / _hstAverageWavelength[ 0 ], NULL );
-
-	// save the reprojected beam.
-//	char beamFilename2[100];
-//	sprintf( beamFilename2, "beam-in-%i.image", pBeam );
-//	_hstCasacoreInterface.WriteCasaImage( beamFilename2, _hstBeamSize, _hstBeamSize, _hstOutputRA, _hstOutputDEC,
-//						_hstBeamCellSize, phstPrimaryBeamIn, CONST_C / _hstAverageWavelength[ 0 ], NULL );
 
 } // imagePlaneReprojectPrimaryBeam
 
@@ -9098,13 +8777,9 @@ void getSuitablePhasePositionForBeam( double * pBeamIn, double * pPhase, int pNu
 	if (left < 0.0)
 		left = 0.0;
 
-//printf( "right: %f, left: %f, top: %f, bottom: %f\n", right, left, top, bottom );
-
 	// get the pixel in the middle of this region.
 	double x = ((right + left) / 2.0);
 	double y = ((top + bottom) / 2.0);
-
-//printf( "centre: <%f,%f>\n", x, y );
 
 	// convert this pixel into a phase position.
 	double ra = 0, dec = 0;
@@ -9121,8 +8796,6 @@ void getSuitablePhasePositionForBeam( double * pBeamIn, double * pPhase, int pNu
 		pPhase[ beam * 2 ] = ra;
 		pPhase[ (beam * 2) + 1 ] = dec;
 	}
-
-//printf( "ra, dec: <%f,%f>\n\n", *pPhaseRA, *pPhaseDEC );
 
 } // getSuitablePhasePositionForBeam
 
@@ -10129,22 +9802,6 @@ void processMeasurementSet( char * pFilenamePrefix, char * pMeasurementSetFilena
 	}
 	memcpy( &hstSampleFieldID[ hstNumSamples / 2 ], hstSampleFieldID, hstNumSamples * sizeof( int ) / 2 );
 
-	//
-	// what to do about phase rotation.....
-	//
-	// beam mosaicing:	(uv domain, used for multiple pointings) the data are phase rotated to the beam positions (FIELD/PHASE_DIR). we need this data for
-	//			constructing the beams in the right place, but we need to phase rotate the data to the output phase centre.
-	// field mosaicing:	NOT CURRENTLY IMPLEMENTED (image domain, used for multiple pointings) the data are phase rotated to the beam positions (FIELD/PHASE_DIR).
-	//			We wouldn't normally want to phase rotate unless we're interested in only one small area of the sky. The final image will be constructed in
-	//			the image domain.
-	// file mosaicing:	(image domain, used for PAF data) the data are phase rotated to the beam positions, but these positions are not found in the measurement set.
-	//			FIELD/PHASE_DIR will be the dish pointing position for ALL beams, and NOT the position that the data are actually phased to. We use
-	//			getASKAPBeamPosition() to get the actual beam positions from the dish pointing position, but this routine currently uses hard-coded offsets
-	//			and will need to be replaced with a better way of doing things. We wouldn't normally want to phase rotate unless we're interested in only
-	//			only small area of the sky.
-	// no mosaicing:	the data are phase rotated to FIELD/PHASE_DIR. we need to phase rotate to the output phase position.
-	//
-
 	// we get the position of the ASKAP PAF beam, based upon the pointing position of the dish (for which we use the phase position).
 	if (_hstTelescope == ASKAP && _hstBeamID[ pFileIndex ] != -1)
 	{
@@ -10162,24 +9819,11 @@ void processMeasurementSet( char * pFilenamePrefix, char * pMeasurementSetFilena
 						/* pCentreDEC = */ hstFieldPhaseFrom[ (field * 2) + 1 ] );
 	}
 
+	// get suitable phase positions for gridding.
 	if (_hstFileMosaic == true)
-	{
-
-		// we get the position of the ASKAP PAF beam, based upon the pointing position of the dish (for which we use the phase position).
-//		if (_hstTelescope == ASKAP && _hstBeamID[ pFileIndex ] != -1)
-//			for ( int field = 0; field < hstNumFields; field++ )
-//				getASKAPBeamPosition(	/* pRA = */ &hstFieldPhaseFrom[ field * 2 ],
-//							/* pDEC = */ &hstFieldPhaseFrom[ (field * 2) + 1 ],
-//							/* pBeamIndex = */ _hstBeamID[ pFileIndex ],
-//							/* pCentreRA = */ hstFieldPhaseFrom[ field * 2 ],
-//							/* pCentreDEC = */ hstFieldPhaseFrom[ (field * 2) + 1 ] );
-
-		// get suitable phase positions for gridding.
 		getSuitablePhasePositionForBeam(	/* pBeamIn = */ hstFieldPhaseFrom,
 							/* pPhase = */ hstFieldPhaseTo,
 							/* pNumBeams = */ hstNumFields );
-
-	}
 
 	// otherwise set the phase position of each field to the required output phase position.
 	else
@@ -10250,7 +9894,7 @@ void processMeasurementSet( char * pFilenamePrefix, char * pMeasurementSetFilena
 
 	// ensure we're not using more than 10 GB.
 	const long int MEMORY_LIMIT = (long int) 10 * (long int) 1073741824;
-//const long int MEMORY_LIMIT = (long int) 2 * (long int) 1073741824;
+
 	if (hstMaxMemory > MEMORY_LIMIT)
 		hstMaxMemory = MEMORY_LIMIT;
 	printf( "we will load a maximum of %4.2f GB of data in each batch\n", (double) hstMaxMemory / (double) 1073741824 );
@@ -10770,15 +10414,10 @@ void processMeasurementSet( char * pFilenamePrefix, char * pMeasurementSetFilena
 			if (devKernelIndex != NULL)
 				cudaFree( (void *) devKernelIndex );
 
-			// we need to sort data into order of W plane, kernel index, U value and V value, and remove all the duplicates.
-//			quickSortData(	/* pLeft = */ hstCurrentVisibility,
-//					/* pRight = */ hstCurrentVisibility + hstVisibilityBatchSize - 1 );
-
 			// compact the data so that items with a duplicate grid position are only gridded once.
 			hstCurrentVisibility = compactData(	/* pTotalVisibilities = */ &_hstNumVisibilities[ pFileIndex ][ stageID ],
 								/* pFirstVisibility = */ hstCurrentVisibility,
 								/* pNumVisibilities = */ hstVisibilityBatchSize );
-//			hstCurrentVisibility = hstCurrentVisibility + hstVisibilityBatchSize; // cjs-mod
 
 			// get the next batch of data.
 			uncompactedVisibilityID += hstVisibilityBatchSize;
@@ -11010,99 +10649,6 @@ void processMeasurementSet( char * pFilenamePrefix, char * pMeasurementSetFilena
 
 	}
 
-	// we try to merge data a second time. this time we will load the data and combine it.
-//	if (_hstNumberOfStages[ pFileIndex ] > 1)
-//	{
-
-//		printf( "\rmerging %i data caches: 0 <---> 0", _hstNumberOfStages[ pFileIndex ] );
-//		fflush( stdout );
-
-//		int recordSize = sizeof( cufftComplex ) + sizeof( VectorI ) + sizeof( int ) + sizeof( int ) + sizeof( float ) + sizeof( cufftComplex );
-
-		// calculate maximum number of visibilities to hold in ram.
-//		long int maxVis = hstMaxMemory / (long int) recordSize;
-
-		// see if each stage can be merged with each other stage.
-//		for ( int stage1 = 0; stage1 < _hstNumberOfStages[ pFileIndex ] - 1; stage1++ )
-//			for ( int stage2 = stage1 + 1; stage2 < _hstNumberOfStages[ pFileIndex ]; stage2++ )
-//			{
-
-//				printf( "\rmerging %i data caches: %i <---> %i      ", _hstNumberOfStages[ pFileIndex ], stage1, stage2 );
-//				fflush( stdout );
-
-//				mergeData(	/* pFilenamePrefix = */ pFilenamePrefix,
-//						/* pMosaicID = */ pFileIndex,
-//						/* pStageID_one = */ stage1,
-//						/* pStageID_two = */ stage2,
-//						/* pLoad1 = */ (stage2 == stage1 + 1),
-//						/* pSave1 = */ (stage2 == _hstNumberOfStages[ pFileIndex ] - 1),
-//						/* pMaxVis = */ maxVis,
-//						/* pWhatData = */ DATA_VISIBILITIES | DATA_GRID_POSITIONS | DATA_KERNEL_INDEXES | DATA_DENSITIES | DATA_WEIGHTS );
-
-//			}
-//		printf( "\rmerging %i data caches: done", _hstNumberOfStages[ pFileIndex ] );
-//		fflush( stdout );
-
-		// shuffle up any files that are now empty.
-//		int numCompressedStages = 1;
-//		for ( int stage = 1; stage < _hstNumberOfStages[ pFileIndex ]; stage++ )
-//		{
-
-			// do we need to move this file to a new location ?
-//			if (_hstNumVisibilities[ pFileIndex ][ stage ] > 0 && numCompressedStages < stage)
-//			{
-	
-				// build filename.
-//				char filenameOld[ 255 ], filenameNew[ 255 ];
-//				if (_hstCacheLocation[0] != '\0')
-//				{
-//					sprintf( filenameNew, "%s%s-%02i-%i-cache.dat", _hstCacheLocation, pFilenamePrefix, pFileIndex, numCompressedStages );
-//					sprintf( filenameOld, "%s%s-%02i-%i-cache.dat", _hstCacheLocation, pFilenamePrefix, pFileIndex, stage );
-//				}
-//				else
-//				{
-//					sprintf( filenameNew, "%s-%02i-%i-cache.dat", pFilenamePrefix, pFileIndex, numCompressedStages );
-//					sprintf( filenameOld, "%s-%02i-%i-cache.dat", pFilenamePrefix, pFileIndex, stage );
-//				}
-
-				// rename file.
-//				rename( filenameOld, filenameNew );
-
-				// update the number of visibilities.
-//				_hstNumVisibilities[ pFileIndex ][ numCompressedStages ] = _hstNumVisibilities[ pFileIndex ][ stage ];
-//				_hstNumVisibilities[ pFileIndex ][ stage ] = 0;
-
-//			}
-
-//			if (_hstNumVisibilities[ pFileIndex ][ stage ] > 0)
-//				numCompressedStages++;
-
-//		}
-
-		// we may need to reduce the number of stages.
-//		if (numCompressedStages < _hstNumberOfStages[ pFileIndex ])
-//		{
-//			printf( ", %i data caches merged into %i caches", _hstNumberOfStages[ pFileIndex ], numCompressedStages );
-//			_hstNumberOfStages[ pFileIndex ] = numCompressedStages;
-//			_hstNumVisibilities[ pFileIndex ] = (long int *) realloc( _hstNumVisibilities[ pFileIndex ], numCompressedStages * sizeof( long int ) );
-//		}
-//		else
-//			printf( ", no reduction in the number of caches" );
-//		printf( "\n\n" );
-
-		// maybe we can turn off caching now.
-//		if (numCompressedStages == 1 && _hstMeasurementSets == 1)
-//		{
-//			_hstCacheData = false;
-//			uncacheData(	/* pFilenamePrefix = */ pFilenamePrefix,
-//					/* pMosaicID = */ pFileIndex,
-//					/* pBatchID = */ 0,
-//					/* pWhatData = */ DATA_ALL,
-//					/* pOffset = */ 0 );
-//		}
-
-//	}
-
 	clock_gettime( CLOCK_REALTIME, &time1 );
 	fprintf( stderr, "--- time (load and process visibilities): (%f ms) ---\n\n", getTime( time2, time1 ) );
 
@@ -11163,14 +10709,7 @@ void processMeasurementSet( char * pFilenamePrefix, char * pMeasurementSetFilena
 						/* pBeamCellSize = */ _hstBeamCellSize * hstWavelengthForBeam * _hstBeamFrequency / CONST_C,
 						/* pImagePlaneReprojection = */ imagePlaneReprojection,
 						/* pVerbose = */ true );
-// save the reprojected beam.
-//{
-//char beamFilename[100];
-//sprintf( beamFilename, "beam-mosaic-%i.image", beam );
-//_hstCasacoreInterface.WriteCasaImage( beamFilename, _hstBeamSize, _hstBeamSize, hstFieldPhaseTo[ beam * 2 ], hstFieldPhaseTo[ (beam * 2) + 1 ],
-//					_hstBeamCellSize, &_hstPrimaryBeam[ pFileIndex ][ beam * _hstBeamSize * _hstBeamSize ],
-//					CONST_C / _hstAverageWavelength[ beam ], NULL );
-//}
+
 	}
 
 	// create some more space for the A-projection primary beams.
@@ -11190,7 +10729,6 @@ void processMeasurementSet( char * pFilenamePrefix, char * pMeasurementSetFilena
 			printf( "\rReprojecting beams for %i a-planes.....%i%%", _hstAPlanes, beam * 100 / hstPrimaryBeamsForFile );
 			fflush( stdout );
 			for ( int aPlane = 0; aPlane < _hstAPlanes; aPlane++ )
-//{
 				imagePlaneReprojectPrimaryBeam(	/* pPrimaryBeamIn = */ hstPrimaryBeamIn,
 								/* pPrimaryBeamOut = */ &_hstPrimaryBeamAProjection[ pFileIndex ][ ((beam * _hstAPlanes) + aPlane) *
 															_hstBeamSize * _hstBeamSize ],
@@ -11204,17 +10742,6 @@ void processMeasurementSet( char * pFilenamePrefix, char * pMeasurementSetFilena
 								/* pBeamCellSize = */ _hstBeamCellSize * hstAPlaneWavelength[ aPlane ] * _hstBeamFrequency / CONST_C,
 								/* pImagePlaneReprojection = */ imagePlaneReprojection,
 								/* pVerbose = */ false );
-
-// save the reprojected beam.
-//if (aPlane == 0)
-//{ // cjs-mod
-//char beamFilename[100];
-//sprintf( beamFilename, "beam-aproj-%i-%i-%i.image", pFileIndex, beam, aPlane );
-//_hstCasacoreInterface.WriteCasaImage( beamFilename, _hstBeamSize, _hstBeamSize, hstFieldPhaseTo[ beam * 2 ], hstFieldPhaseTo[ (beam * 2) + 1 ],
-//					_hstBeamCellSize, &(_hstPrimaryBeamAProjection[ pFileIndex ][ ((beam * _hstAPlanes) + aPlane) * _hstBeamSize * _hstBeamSize ]),
-//					CONST_C / _hstAverageWavelength[ beam ], NULL );
-//}
-//}
 
 		}
 
@@ -11352,8 +10879,6 @@ int main( int pArgc, char ** pArgv )
 		_hstNumGPUs++;
 
 	// build a list of GPUs.
-//	_hstGPU = (int *) malloc( 1 * sizeof( int ) );
-//	_hstGPU[ 0 ] = atoi( _hstGPUParam );
 	if (_hstNumGPUs == 0)
 	{
 		_hstNumGPUs = 1;
@@ -11594,12 +11119,6 @@ int main( int pArgc, char ** pArgv )
 					/* phstTotalWeightPerCell = */ hstTotalWeightPerCell );
 
 	// free data.
-//	if (hstFilename != NULL)
-//	{
-//		for ( int i = 0; i < _hstMeasurementSets; i++ )
-//			free( (void *) hstFilename[ i ] );
-//		free( (void *) hstFilename );
-//	}
 	if (_hstMeasurementSetPath != NULL)
 	{
 		for ( int i = 0; i < _hstMeasurementSets; i++ )
@@ -11757,8 +11276,6 @@ int main( int pArgc, char ** pArgv )
 											(long int) _hstBeamSize * (long int) _hstBeamSize) + (long int) index ], 2 );
 				else
 					_hstPrimaryBeamPattern[ index ] += pow( _hstPrimaryBeam[ /* mosaic index = */ beam ][ (long int) index ], 2 );
-//				_hstPrimaryBeamPattern[ index ] += _hstPrimaryBeam[ ((long int) beam * (long int) _hstBeamSize * (long int) _hstBeamSize) +
-//											(long int) index ];
 			_hstPrimaryBeamPattern[ index ] = sqrt( _hstPrimaryBeamPattern[ index ] );
 
 			// record the maximum pixel value for normalisation.
@@ -11802,7 +11319,6 @@ int main( int pArgc, char ** pArgv )
 					beamPtr = &_hstPrimaryBeam[ /* mosaic index = */ 0 ][ (long int) beam * (long int) _hstBeamSize * (long int) _hstBeamSize ];
 				else
 					beamPtr = _hstPrimaryBeam[ /* mosaic index = */ beam ];
-// cjs-mod				_hstNormalisationPattern[ index ] += pow( beamPtr[ index ], 2 );
 				_hstNormalisationPattern[ index ] += pow( beamPtr[ index ], 1 );
 			}
 
@@ -12346,9 +11862,6 @@ int main( int pArgc, char ** pArgv )
 				for ( int gpu = 0; gpu < _hstNumGPUs; gpu++ )
 					hstNextVisibility[ gpu ] = 0;
 
-struct timespec uploadStart, uploadEnd;
-clock_gettime( CLOCK_REALTIME, &uploadStart );
-
 				int cudaDeviceIndex = 0;
 				for ( int kernelSet = 0; kernelSet < _hstKernelSets; kernelSet++ )
 				{
@@ -12403,12 +11916,6 @@ clock_gettime( CLOCK_REALTIME, &uploadStart );
 				// free data.
 				free( (void *) hstNextVisibility );
 
-clock_gettime( CLOCK_REALTIME, &uploadEnd );
-_uploadData += getTime( uploadStart, uploadEnd );
-
-struct timespec gridStart, gridEnd;
-clock_gettime( CLOCK_REALTIME, &gridStart );
-
 				err = cudaGetLastError();
 				if (err != cudaSuccess)
 					printf( "unknown CUDA error on line %d (%s)\n", __LINE__, cudaGetErrorString( err ) );
@@ -12437,9 +11944,6 @@ clock_gettime( CLOCK_REALTIME, &gridStart );
 
 				// get the next batch of data.
 				batch = batch + 1;
-
-clock_gettime( CLOCK_REALTIME, &gridEnd );
-_gridding += getTime( gridStart, gridEnd );
 		
 			}
 
@@ -12614,12 +12118,6 @@ _gridding += getTime( gridStart, gridEnd );
 		}
 
 	}
-
-	printf( "--- time (setup gridding): (%f ms) ---\n\n", _setup );
-	printf( "--- time (generate kernel): (%f ms) ---\n\n", _generateKernel );
-	printf( "--- time (upload data): (%f ms) ---\n\n", _uploadData );
-	printf( "--- time (other gridding1): (%f ms) ---\n\n", _otherGridding );
-	printf( "--- time (gridding): (%f ms) ---\n\n", _gridding );
 
 	clock_gettime( CLOCK_REALTIME, &time2 );
 	printf( "--- time (total, inc fft): (%f ms) ---\n\n", getTime( time1, time2 ) );
