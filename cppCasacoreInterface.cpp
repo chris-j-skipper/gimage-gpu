@@ -219,6 +219,21 @@ int CasacoreInterface::NumberOfAntennae( const char * pFilename )
 	return numberOfAntennae( pFilename );
 				
 } // CasacoreInterface::NumberOfAntennae
+
+//
+//	CasacoreInterface::GetASKAPBeamOffset
+//
+//	CJS: 13/04/2021
+//
+//	get a list of the beam offsets for ASKAP from the FEED table.
+//
+
+bool CasacoreInterface::GetASKAPBeamOffset( const char * pMeasurementSet, int pBeamID, double * pXOffset, double * pYOffset )
+{
+
+	return getASKAPBeamOffset( pMeasurementSet, pBeamID, pXOffset, pYOffset );
+
+} // CasacoreInterface::GetASKAPBeamOffset
 						
 //
 //	CasacoreInterface::GetWavelengths()
@@ -858,12 +873,60 @@ int CasacoreInterface::numberOfAntennae( const char * pMeasurementSet )
 	
 	// ensure that we have a 1-D, and at least one row.
 	if (dishDiameterShape.nelements() == 1)
-		count = (int)dishDiameterShape[ 0, 0 ];
+		count = (int) dishDiameterShape[ 0, 0 ];
 	
 	// return the number of antennae.
 	return count;
 				
 } // CasacoreInterface::numberOfAntennae
+
+//
+//	CasacoreInterface::getASKAPBeamOffset
+//
+//	CJS: 13/04/2021
+//
+//	get the x and y ASKAP beam offset from the FEED table.
+//
+
+bool CasacoreInterface::getASKAPBeamOffset( const char * pMeasurementSet, int pBeamID, double * pXOffset, double * pYOffset )
+{
+
+	char sqlCommand[ 1000 ];
+
+	// construct the SQL command.
+	sprintf( sqlCommand,	"SELECT		BEAM_OFFSET "
+				"FROM		%s/FEED "
+				"WHERE		(ANTENNA_ID = 0) AND "
+					       "(FEED_ID = %i)", pMeasurementSet, pBeamID );
+	
+	// issue SQL command.
+	Table tblOffsets = tableCommand( sqlCommand );
+	ArrayColumn<double> colBeamOffset( tblOffsets, "BEAM_OFFSET" );
+	Array<double> beamOffsetArray;
+
+	// get the whole column.
+	colBeamOffset.getColumn( beamOffsetArray, true );
+	IPosition offsetShape = beamOffsetArray.shape();
+
+	// count the spws.
+	int numBeams = tblOffsets.nrow();
+
+	// get the number of beam offsets.
+	if (numBeams > 0 && offsetShape[ 0, 0 ] == 2)
+	{
+
+		// (dimensions, x/y, ?, row)
+		IPosition uCellXOffset( 3, 0, 0, 0 );
+		IPosition uCellYOffset( 3, 1, 0, 0 );
+		*pXOffset = beamOffsetArray( uCellXOffset );
+		*pYOffset = beamOffsetArray( uCellYOffset );
+
+	}
+
+	// return something.
+	return (numBeams > 0);
+
+} // CasacoreInterface::getASKAPBeamOffset
 						
 //
 //	CasacoreInterface::getWavelengths()

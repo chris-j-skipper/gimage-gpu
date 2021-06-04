@@ -52,6 +52,9 @@ class CasacoreInterface
 
 		// get a list of antennae.
 		int GetAntennae( const char * pMeasurementSet, double ** pDishDiameter, bool ** pFlagged );
+
+		// get the ASKAP beam offsets from the FEED table.
+		bool GetASKAPBeamOffset( const char * pMeasurementSet, int pBeamID, double * pXOffset, double * pYOffset );
 						
 		// get a list of channel frequencies from the measurement set
 		bool GetWavelengths( const char * pMeasurementSet, int * pNumSpws, int ** pNumChannels, double *** pWavelength );
@@ -116,6 +119,9 @@ class CasacoreInterface
 
 		// get all the antennae from the file, including the flagged ones.
 		int getAntennae( const char * pMeasurementSet, double ** pDishDiameter, bool ** pFlagged );
+
+		// get the ASKAP beam offsets from the FEED table.
+		bool getASKAPBeamOffset( const char * pMeasurementSet, int pBeamID, double * pXOffset, double * pYOffset );
 						
 		// count the number of antennae in the measurement set.
 		int numberOfAntennae( const char * pMeasurementSet );
