@@ -223,7 +223,7 @@ Matrix3x3 PhaseCorrection::rotateX( double pAngle )
 	
 	// row 3.
 	rotationMatrix.a31 = 0;
-	rotationMatrix.a32 = sin( rad( pAngle ) );
+	rotationMatrix.a32 = sin( rad( pAngle ) );;
 	rotationMatrix.a33 = cos( rad( pAngle ) );
 	
 	// return something.
@@ -310,12 +310,10 @@ Matrix3x3 PhaseCorrection::convertXYZtoUVW( PolarCoords pCoords )
 {
 	
 	// rotate the coordinate system so that the pointing direction is at RA -90 deg.
-	Matrix3x3 rotationMatrix = rotateZ( -(90 + pCoords.longitude) );
-	//Matrix3x3 rotationMatrix = rotateZ( (90 - pCoords.longitude) );
+	Matrix3x3 rotationMatrix = rotateZ( -(90.0 + pCoords.longitude) );
 	
 	// now rotate the coordinate system so that the pointing direction is at the north celestial pole.
-	return multMatrix( rotateX( -(90 - pCoords.latitude) ), rotationMatrix );
-	//return multMatrix( rotateX( (90 - pCoords.latitude) ), rotationMatrix );
+	return multMatrix( rotateX( pCoords.latitude - 90.0 ), rotationMatrix );
 	
 } // convertXYZtoUVW
 
@@ -333,11 +331,9 @@ Matrix3x3 PhaseCorrection::convertUVWtoXYZ( PolarCoords pCoords )
 	
 	// rotate the coordinate system so that the pointing direction is at the required dec, and somewhere along RA -90 deg.
 	Matrix3x3 rotationMatrix = rotateX( 90 - pCoords.latitude );
-	//Matrix3x3 rotationMatrix = rotateX( -(90 - pCoords.latitude) );
 	
 	// row rotate the coordinate system so that the pointing direction is at the required RA as well.
 	return multMatrix( rotateZ( pCoords.longitude + 90 ), rotationMatrix );
-	//return multMatrix( rotateZ( pCoords.longitude - 90 ), rotationMatrix );
 	
 } // convertUVWtoXYZ
 
@@ -580,7 +576,7 @@ void PhaseCorrection::init()
 void PhaseCorrection::rotate()
 {
 		
-	// get the additional path length difference when switching from the in to the out phase centre..
+	// get the additional path length difference when switching from the in to the out phase centre.
 	phase = getPathLengthDifference( uvwIn );
 		
 	//printf( "additional path length difference: %f m\n\n", phase );
