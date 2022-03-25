@@ -315,9 +315,8 @@ __global__ void devSetMask( float * pImage, bool * pMask, Reprojection::rpVectI 
 //
 
 __global__ void devReprojectionInToOut( float * pInImage, float * pOutImage, double * pProjectionMap, bool * pMapValid,
-						float * pNormalisationPattern, float * pPrimaryBeamPattern, Reprojection::rpVectI pMapSize, Reprojection::rpVectI pInSize,
-						Reprojection::rpVectI pOutSize, bool * pInMask, float * pBeamIn, float * pBeamOut, Reprojection::rpVectI pBeamSize,
-						bool pAProjection )
+						Reprojection::rpVectI pMapSize, Reprojection::rpVectI pInSize, Reprojection::rpVectI pOutSize, bool * pInMask, float * pBeamIn,
+						float * pBeamOut, Reprojection::rpVectI pBeamSize, bool pAProjection )
 {
 	
 	const int POS_BL = 0;
@@ -424,7 +423,8 @@ __global__ void devReprojectionInToOut( float * pInImage, float * pOutImage, dou
 				}
 
 				// only add up the primary beam if a primary beam was supplied.
-				if (pBeamIn != NULL && (pNormalisationPattern != NULL || pPrimaryBeamPattern != NULL || pAProjection == true))
+//				if (pBeamIn != NULL && (pNormalisationPattern != NULL || pPrimaryBeamPattern != NULL || pAProjection == true))
+				if (pBeamIn != NULL)
 				{
 
 					// calculate the pixels in the input beam.
@@ -437,40 +437,11 @@ __global__ void devReprojectionInToOut( float * pInImage, float * pOutImage, dou
 					// weight the image using the primary beam. we don't need to do this if we're not using A-projection because the beam correction
 					// and the beam weighting will cancel each other out.
 					if (pAProjection == true)
+						value *= pow( beamIn, 2 );
+					else
 						value *= beamIn;
 
-					bool buildPatterns = ((int) floor( (double) (i - 1) * (double) pBeamSize.x / (double) pInSize.x ) != beamI) &&
-								((int) floor( (double) (j - 1) * (double) pBeamSize.y / (double) pInSize.y ) != beamJ);
-
-					// the normalisation pattern is the sum of the primary beams at this pixel, and will be used later to normalise this pixel.
-					if (pNormalisationPattern != NULL && buildPatterns == true)
-					{
-						//value *= beamIn; // pow( beamIn, 2 );
-//						atomicAddDoubleReprojection( &pNormalisationPattern[ location[POS_BL] ], pow( beamIn, 1 ) * blFraction );
-//						atomicAddDoubleReprojection( &pNormalisationPattern[ location[POS_BR] ], pow( beamIn, 1 ) * brFraction );
-//						atomicAddDoubleReprojection( &pNormalisationPattern[ location[POS_TL] ], pow( beamIn, 1 ) * tlFraction );
-//						atomicAddDoubleReprojection( &pNormalisationPattern[ location[POS_TR] ], pow( beamIn, 1 ) * trFraction );
-						atomicAdd( &pNormalisationPattern[ outBeamLocation[POS_BL] ], pow( beamIn, 1 ) * blFraction );
-						atomicAdd( &pNormalisationPattern[ outBeamLocation[POS_BR] ], pow( beamIn, 1 ) * brFraction );
-						atomicAdd( &pNormalisationPattern[ outBeamLocation[POS_TL] ], pow( beamIn, 1 ) * tlFraction );
-						atomicAdd( &pNormalisationPattern[ outBeamLocation[POS_TR] ], pow( beamIn, 1 ) * trFraction );
-					}
-
-					// the primary beam pattern is the sum of the primary beams squared at this pixel, and will be used later to suppress the noise
-					// at the edges of the mosaic.
-					if (pPrimaryBeamPattern != NULL && buildPatterns == true)
-					{
-//						atomicAddDoubleReprojection( &pPrimaryBeamPattern[ location[POS_BL] ], pow( beamIn, 2 ) * blFraction );
-//						atomicAddDoubleReprojection( &pPrimaryBeamPattern[ location[POS_BR] ], pow( beamIn, 2 ) * brFraction );
-//						atomicAddDoubleReprojection( &pPrimaryBeamPattern[ location[POS_TL] ], pow( beamIn, 2 ) * tlFraction );
-//						atomicAddDoubleReprojection( &pPrimaryBeamPattern[ location[POS_TR] ], pow( beamIn, 2 ) * trFraction );
-						atomicAdd( &pPrimaryBeamPattern[ outBeamLocation[POS_BL] ], pow( beamIn, 2 ) * blFraction );
-						atomicAdd( &pPrimaryBeamPattern[ outBeamLocation[POS_BR] ], pow( beamIn, 2 ) * brFraction );
-						atomicAdd( &pPrimaryBeamPattern[ outBeamLocation[POS_TL] ], pow( beamIn, 2 ) * tlFraction );
-						atomicAdd( &pPrimaryBeamPattern[ outBeamLocation[POS_TR] ], pow( beamIn, 2 ) * trFraction );
-					}
-
-				}
+				} // (pBeamIn != NULL)
 
 				// update the pixel value.
 				atomicAdd( &pOutImage[ location[POS_BL] ], (float) (value * blFraction) );
@@ -478,11 +449,11 @@ __global__ void devReprojectionInToOut( float * pInImage, float * pOutImage, dou
 				atomicAdd( &pOutImage[ location[POS_TL] ], (float) (value * tlFraction) );
 				atomicAdd( &pOutImage[ location[POS_TR] ], (float) (value * trFraction) );
 
-			}
+			} // (masked == false)
 
-		}
+		} // (withinRange == true)
 
-	}
+	} // (i < pInSize.x && j < pInSize.y)
 
 } // devReprojectionInToOut
 
@@ -527,10 +498,9 @@ __global__ void devReprojectionInToOut( float * pInImage, float * pOutImage, dou
 //	pixel).
 //
 
-__global__ void devReprojectionOutToIn( float * pInImage, float * pOutImage, double * pProjectionMap, bool * pMapValid,
-						float * pNormalisationPattern, float * pPrimaryBeamPattern, Reprojection::rpVectI pMapSize, Reprojection::rpVectI pInSize,
-						Reprojection::rpVectI pOutSize, bool * pInMask, float * pBeamIn, float * pBeamOut, Reprojection::rpVectI pBeamSize,
-						bool pAProjection )
+__global__ void devReprojectionOutToIn( float * pInImage, float * pOutImage, double * pProjectionMap, bool * pMapValid, Reprojection::rpVectI pMapSize,
+						Reprojection::rpVectI pInSize, Reprojection::rpVectI pOutSize, bool * pInMask, float * pBeamIn, float * pBeamOut,
+						Reprojection::rpVectI pBeamSize, bool pAProjection )
 {
 	
 	const int POS_BL = 0;
@@ -574,7 +544,7 @@ __global__ void devReprojectionOutToIn( float * pInImage, float * pOutImage, dou
 
 		// convert the interpolation point to beam pixels. the in image and in beam cover the same area of the sky, but have a different number of pixels.
 		Reprojection::rpVectD inBeamPixelInterpolationPoint = {	.x = inPixelInterpolationPoint.x * (double) pBeamSize.x / (double) pInSize.x,
-									.y = inPixelInterpolationPoint.y * (double) pBeamSize.y / (double) pInSize.y };
+										.y = inPixelInterpolationPoint.y * (double) pBeamSize.y / (double) pInSize.y };
 
 		// calculate the four pixel coordinates surrounding this beam interpolation point.
 		Reprojection::rpVectI inBeamPixel[4];
@@ -620,10 +590,10 @@ __global__ void devReprojectionOutToIn( float * pInImage, float * pOutImage, dou
 
 				// get an bilinearly interpolated value from the input pixel image.
 				double value = Reprojection::interpolateValue(	inPixelInterpolationPoint,
-										(double) pInImage[ location[POS_BL] ],
-										(double) pInImage[ location[POS_BR] ],
-										(double) pInImage[ location[POS_TL] ],
-										(double) pInImage[ location[POS_TR] ] );
+											(double) pInImage[ location[POS_BL] ],
+											(double) pInImage[ location[POS_BR] ],
+											(double) pInImage[ location[POS_TL] ],
+											(double) pInImage[ location[POS_TR] ] );
 
 				// ensure all pixels are within the extent of the input beam.
 				bool inBeamWithinRange = true;
@@ -639,8 +609,9 @@ __global__ void devReprojectionOutToIn( float * pInImage, float * pOutImage, dou
 				int beamI = (int) ((double) i * (double) pBeamSize.x / (double) pOutSize.x);
 				int beamJ = (int) ((double) j * (double) pBeamSize.y / (double) pOutSize.y);
 
-				// only add up the primary beam if a primary beam was supplied.
-				if (pBeamIn != NULL && (pNormalisationPattern != NULL || pPrimaryBeamPattern != NULL || pAProjection == true) && inBeamWithinRange == true)
+				// only apply the primary beam if a primary beam was supplied.
+//				if (pBeamIn != NULL && (pNormalisationPattern != NULL || pPrimaryBeamPattern != NULL || pAProjection == true) && inBeamWithinRange == true)
+				if (pBeamIn != NULL && inBeamWithinRange == true)
 				{
 
 					// add up the primary beam for these interpolation points.
@@ -650,32 +621,11 @@ __global__ void devReprojectionOutToIn( float * pInImage, float * pOutImage, dou
 												pBeamIn[ inBeamLocation[POS_TL] ],
 												pBeamIn[ inBeamLocation[POS_TR] ] );
 
-					// weight the image using the primary beam. we don't need to do this if we're not using A-projection because the beam correction
-					// and the beam weighting will cancel each other out.
+					// weight the image using the primary beam.
 					if (pAProjection == true)
+						value *= pow( beamIn, 2 );
+					else
 						value *= beamIn;
-
-					// get the primary beam for this pixel position. the input primary beam is the correct beam for the input image, but
-					// its phase position and size correspond to those of the output image.
-// cjs-mod					double beamIn = pBeamIn[ (j * pOutSize.x) + i ]; // cjs-mod
-
-					// the beam image is much smaller than the input and output images. we only build the normalisation and primary-beam patterns once
-					// per beam pixel, rather than once per output-image pixel. we check here whether this output-image pixel <i,j> is the first
-					// combination of <i,j> that scales to this particular beam pixel <beamI,beamJ>.
-					bool buildPatterns = ((int) floor( (double) (i - 1) * (double) pBeamSize.x / (double) pOutSize.x ) != beamI) &&
-								((int) floor( (double) (j - 1) * (double) pBeamSize.y / (double) pOutSize.y ) != beamJ);
-
-					// the normalisation pattern is the sum of the primary beams at this pixel, and will be used later to normalise this pixel.
-					if (pNormalisationPattern != NULL && buildPatterns == true)
-					{
-// cjs-mod						value *= beamIn; // pow( beamIn, 2 );
-						pNormalisationPattern[ (beamJ * pBeamSize.x) + beamI ] += pow( beamIn, 1 );
-					}
-
-					// the primary beam pattern is the sum of the primary beams squared at this pixel, and will be used later to suppress the noise
-					// at the edges of the mosaic.
-					if (pPrimaryBeamPattern != NULL && buildPatterns == true)
-						pPrimaryBeamPattern[ (beamJ * pBeamSize.x) + beamI ] += pow( beamIn, 2 );
 
 				}
 
@@ -696,55 +646,6 @@ __global__ void devReprojectionOutToIn( float * pInImage, float * pOutImage, dou
 	}
 
 } // devReprojectionOutToIn
-
-//
-//	devReweight()
-//
-//	CJS: 05/12/2018
-//
-//	Divide each pixel by its normalisation pattern. We are constructing an (weighted) average of our mosaic.
-//
-
-__global__ void devReweight( float * pOutImage, float * pNormalisationPattern, float * pPrimaryBeamPattern, Reprojection::rpVectI pOutSize,
-				Reprojection::rpVectI pBeamSize )
-{
-	
-	int i = (blockIdx.x * blockDim.x) + threadIdx.x;
-	int j = (blockIdx.y * blockDim.y) + threadIdx.y;
-
-	// ensure we're within the boundaries of the image.
-	if (i < pOutSize.x && j < pOutSize.y)
-	{
-
-		// calculate the pixels in the output beam.
-		int beamI = (int) ((double) i * (double) pBeamSize.x / (double) pOutSize.x);
-		int beamJ = (int) ((double) j * (double) pBeamSize.y / (double) pOutSize.y);
-
-		// apply the normalisation pattern to the image. this step corrects for the weighting applied to each pixel depending on its position in the primary beam.
-		if (pNormalisationPattern != NULL)
-		{
-
-			float normalisationPattern = pNormalisationPattern[ (beamJ * pBeamSize.x) + beamI ];
-			if (normalisationPattern != 0.0)
-				pOutImage[ (j * pOutSize.x) + i ] /= normalisationPattern;
-			else
-				pOutImage[ (j * pOutSize.x) + i ] = 0.0;
-
-		}
-
-		// apply the primary beam pattern to the image. this step suppresses the noise near the edge of the mosaic.
-		if (pPrimaryBeamPattern != NULL)
-		{
-
-			float primaryBeamPattern = pPrimaryBeamPattern[ (beamJ * pBeamSize.x) + beamI ];
-
-			pOutImage[ (j * pOutSize.x) + i ] *= primaryBeamPattern;
-
-		}
-
-	}
-
-} // devReweight
 
 //
 //	P U B L I C   C L A S S   M E M B E R S
@@ -852,10 +753,9 @@ void Reprojection::GetCoordinates( double pX, double pY, rpCoordSys pCoordinateS
 //	Do an image-plane reprojection.
 //
 
-void Reprojection::ReprojectImage( float * pdevInImage, float * pdevOutImage, float * pdevNormalisationPattern, float * pdevPrimaryBeamPattern,
-					rpCoordSys pInCoordinateSystem, rpCoordSys pOutCoordinateSystem, rpVectI pInSize, rpVectI pOutSize, bool * pdevInMask,
-					float * pdevBeamIn, float * pdevBeamOut, rpVectI pBeamSize, ProjectionDirection pProjectionDirection,
-					bool pAProjection, bool pVerbose )
+void Reprojection::ReprojectImage( float * pdevInImage, float * pdevOutImage, rpCoordSys pInCoordinateSystem, rpCoordSys pOutCoordinateSystem, rpVectI pInSize,
+					rpVectI pOutSize, bool * pdevInMask, float * pdevBeamIn, float * pdevBeamOut, rpVectI pBeamSize,
+					ProjectionDirection pProjectionDirection, bool pAProjection, bool pVerbose )
 {
 	
 	// get some properties from the device.
@@ -904,8 +804,7 @@ void Reprojection::ReprojectImage( float * pdevInImage, float * pdevOutImage, fl
 	_inCoordinateSystem.inv_cd = calculateInverseMatrix( _inCoordinateSystem.cd );
 
 	// do the reprojection and regridding.
-	reprojection( pdevInImage, pdevOutImage, pdevNormalisationPattern, pdevPrimaryBeamPattern, pdevInMask, pdevBeamIn, pdevBeamOut, pBeamSize, pProjectionDirection,
-			pAProjection );
+	reprojection( pdevInImage, pdevOutImage, pdevInMask, pdevBeamIn, pdevBeamOut, pBeamSize, pProjectionDirection, pAProjection );
 
 } // Reprojection::ReprojectImage
 
@@ -973,95 +872,6 @@ void Reprojection::ReprojectPixel( double * pPixel, int pNumPixels, rpCoordSys p
 	}
 
 } // Reprojection::ReprojectPixel
-
-//
-//	Reprojection::ReweightImage()
-//
-//	CJS: 05/12/2018
-//
-//	Calculate the pixel value by dividing each pixel by its weight.
-//
-
-void Reprojection::ReweightImage( float * pdevOutImage, float * pdevNormalisationPattern, float * pdevPrimaryBeamPattern, rpVectI pOutSize, bool * pdevOutMask,
-					rpVectI pBeamSize )
-{
-
-	cudaError_t err;
-
-	// work out size of kernel call.
-	dim3 gridSize2D( 1, 1 );
-	dim3 blockSize2D( 1, 1 );
-
-	// if we have been supplied with a primary beam pattern then normalise the image so that the primary been pattern has a maximum of 1, and update the mask if one is
-	// provided.
-	if (pdevPrimaryBeamPattern != NULL)
-	{
-
-		// take the square root of each of the pixels (since the primary beams are added in quadrature).
-		setThreadBlockSize2D( pBeamSize.x, pBeamSize.y, gridSize2D, blockSize2D );
-		devSquareRoot<<< gridSize2D, blockSize2D >>>(	/* pImage = */ pdevPrimaryBeamPattern,
-								/* pMapSize = */ pBeamSize );
-
-		// create memory to hold the maximum pixel value.
-		float * devMaxValue;
-		err = cudaMalloc( (void **) &devMaxValue, sizeof( float ) );
-		if (err != cudaSuccess)
-			printf( "error creating device memory for the maximum value of the primary beam pattern (%s)\n", cudaGetErrorString( err ) );
-		else
-		{
-
-			// set the maximum value to zero.
-			cudaMemset( (void *) devMaxValue, 0, sizeof( float ) );
-
-			// get the maximum pixel value.
-			devGetMaxPixel<<< 1, 1 >>>(	/* pImage = */ pdevPrimaryBeamPattern,
-							/* pMaxValue = */ devMaxValue,
-							/* pMapSize = */ pBeamSize );
-
-			// normalise the primary beam pattern using the maximum value.
-			setThreadBlockSize2D( pBeamSize.x, pBeamSize.y, gridSize2D, blockSize2D );
-			devNormalise<<< gridSize2D, blockSize2D >>>(	/* pImage = */ pdevPrimaryBeamPattern,
-									/* pNormalisation = */ devMaxValue,
-									/* pMapSize = */ pBeamSize );
-
-		}
-
-		// free memory.
-		if (devMaxValue != NULL)
-			cudaFree( (void *) devMaxValue );
-
-		// set the mask (if one is provided).
-		if (pdevOutMask != NULL)
-		{
-
-			setThreadBlockSize2D( pOutSize.x, pOutSize.y, gridSize2D, blockSize2D );
-			devSetMask<<< gridSize2D, blockSize2D >>>(	/* pImage = */ pdevPrimaryBeamPattern,
-									/* pMask = */ pdevOutMask,
-									/* pMapSize = */ pOutSize,
-									/* pBeamSize = */ pBeamSize );
-
-		}
-
-	}
-
-	// ensure weight has been calculated.
-	if (pdevNormalisationPattern != NULL)
-	{
-
-		// divide each pixel by its normalisation pattern.
-		setThreadBlockSize2D( pOutSize.x, pOutSize.y, gridSize2D, blockSize2D );
-		devReweight<<< gridSize2D, blockSize2D >>>(	/* pOutImage = */ pdevOutImage,
-								/* pNormalisationPattern = */ pdevNormalisationPattern,
-								/* pPrimaryBeamPattern = */ pdevPrimaryBeamPattern,
-								/* pOutSize = */ pOutSize,
-								/* pBeamSize = */ pBeamSize );
-		err = cudaGetLastError();
-		if (err != cudaSuccess)
-			printf( "error reweighting mosaic image on the device (%s)\n", cudaGetErrorString( err ) );
-
-	}
-
-} // Reprojection::ReweightImage
 
 //
 //	G E N E R A L   F U N C T I O N S
@@ -1645,14 +1455,10 @@ __host__ __device__ double Reprojection::interpolateValue( rpVectD pPosition, do
 	
 	// subtract the integer part of the position. we don't need this here.
 	rpVectI integerPart = { .x = (int) floor( pPosition.x ), .y = (int) floor( pPosition.y ) };
-	rpVectD fraction = { .x = pPosition.x - (double)integerPart.x, .y = pPosition.y - (double)integerPart.y };
-		
-	// interpolate top and bottom in the x-direction.
-	double valueTop = ((pTRValue - pTLValue) * fraction.x) + pTLValue;
-	double valueBottom = ((pBRValue - pBLValue) * fraction.x) + pBLValue;
-		
-	// interpolate in y-direction.
-	return ((valueTop - valueBottom) * fraction.y) + valueBottom;
+	rpVectD fraction = { .x = pPosition.x - (double) integerPart.x, .y = pPosition.y - (double) integerPart.y };
+
+	return ((pTLValue * fraction.y * (1.0 - fraction.x)) + (pTRValue * fraction.y * fraction.x) +
+		(pBLValue * (1.0 - fraction.y) * (1.0 - fraction.x)) + (pBRValue * (1.0 - fraction.y) * fraction.x));
 
 } // Reprojection::interpolateValue
 
@@ -1697,9 +1503,8 @@ __host__ __device__ double Reprojection::interpolateValue( rpVectD pPosition, do
 //	pixel).
 //
 
-void Reprojection::reprojection( float * pdevInImage, float * pdevOutImage, float * pdevNormalisationPattern, float * pdevPrimaryBeamPattern,
-					bool * pdevInMask, float * pdevBeamIn, float * pdevBeamOut, rpVectI pBeamSize, ProjectionDirection pProjectionDirection,
-					bool pAProjection )
+void Reprojection::reprojection( float * pdevInImage, float * pdevOutImage, bool * pdevInMask, float * pdevBeamIn, float * pdevBeamOut, rpVectI pBeamSize,
+					ProjectionDirection pProjectionDirection, bool pAProjection )
 {
 
 	cudaError_t err;
@@ -1750,9 +1555,8 @@ void Reprojection::reprojection( float * pdevInImage, float * pdevOutImage, floa
 
 		// update the output image by reading values from the input image.
 		setThreadBlockSize2D( _outSize.x, _outSize.y, gridSize2D, blockSize2D );
-		devReprojectionOutToIn<<< gridSize2D, blockSize2D >>>( pdevInImage, pdevOutImage, _devProjectionMap, _devMapValid, pdevNormalisationPattern,
-									pdevPrimaryBeamPattern, mapSize, _inSize, _outSize, pdevInMask, pdevBeamIn, pdevBeamOut, pBeamSize,
-									pAProjection );
+		devReprojectionOutToIn<<< gridSize2D, blockSize2D >>>( pdevInImage, pdevOutImage, _devProjectionMap, _devMapValid, mapSize, _inSize, _outSize, pdevInMask,
+									pdevBeamIn, pdevBeamOut, pBeamSize, pAProjection );
 
 	}
 	else
@@ -1760,9 +1564,8 @@ void Reprojection::reprojection( float * pdevInImage, float * pdevOutImage, floa
 
 		// update the output image by reading values from the input image.
 		setThreadBlockSize2D( _inSize.x, _inSize.y, gridSize2D, blockSize2D );
-		devReprojectionInToOut<<< gridSize2D, blockSize2D >>>( pdevInImage, pdevOutImage, _devProjectionMap, _devMapValid, pdevNormalisationPattern,
-									pdevPrimaryBeamPattern, mapSize, _inSize, _outSize, pdevInMask, pdevBeamIn, pdevBeamOut, pBeamSize,
-									pAProjection );
+		devReprojectionInToOut<<< gridSize2D, blockSize2D >>>( pdevInImage, pdevOutImage, _devProjectionMap, _devMapValid, mapSize, _inSize, _outSize, pdevInMask,
+									pdevBeamIn, pdevBeamOut, pBeamSize, pAProjection );
 
 	}
 

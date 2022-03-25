@@ -158,35 +158,35 @@ bool CasacoreInterface::SaveBitmap( const char * pFilename, complex<double> * pI
 //	public interface to writing casa images.
 //
 
-void CasacoreInterface::WriteCasaImage( const char * pFilename, int pWidth, int pHeight, double pRA, double pDec,
-						double pPixelSize, complex<double> * pImage, double pFrequency, bool * pMask )
+void CasacoreInterface::WriteCasaImage( char * pFilename, int pWidth, int pHeight, double pRA, double pDec,
+						double pPixelSize, complex<double> * pImage, double pFrequency, bool * pMask, directionType pDirectionType, int pStokesImages )
 {
 	
-	writeCasaImage( pFilename, pWidth, pHeight, pRA, pDec, pPixelSize, (double *) pImage, pFrequency, pMask, COMPLEX );
+	writeCasaImage( pFilename, pWidth, pHeight, pRA, pDec, pPixelSize, (double *) pImage, pFrequency, pMask, COMPLEX, pDirectionType, pStokesImages );
 				
 } // CasacoreInterface::WriteCasaImage
 
-void CasacoreInterface::WriteCasaImage( const char * pFilename, int pWidth, int pHeight, double pRA, double pDec,
-						double pPixelSize, double * pImage, double pFrequency, bool * pMask )
+void CasacoreInterface::WriteCasaImage( char * pFilename, int pWidth, int pHeight, double pRA, double pDec,
+						double pPixelSize, double * pImage, double pFrequency, bool * pMask, directionType pDirectionType, int pStokesImages )
 {
 	
-	writeCasaImage( pFilename, pWidth, pHeight, pRA, pDec, pPixelSize, pImage, pFrequency, pMask, DOUBLE );
+	writeCasaImage( pFilename, pWidth, pHeight, pRA, pDec, pPixelSize, pImage, pFrequency, pMask, DOUBLE, pDirectionType, pStokesImages );
 				
 } // CasacoreInterface::WriteCasaImage
 
-void CasacoreInterface::WriteCasaImage( const char * pFilename, int pWidth, int pHeight, double pRA, double pDec,
-						double pPixelSize, float * pImage, double pFrequency, bool * pMask )
+void CasacoreInterface::WriteCasaImage( char * pFilename, int pWidth, int pHeight, double pRA, double pDec,
+						double pPixelSize, float * pImage, double pFrequency, bool * pMask, directionType pDirectionType, int pStokesImages )
 {
 	
-	writeCasaImage( pFilename, pWidth, pHeight, pRA, pDec, pPixelSize, pImage, pFrequency, pMask, FLOAT );
+	writeCasaImage( pFilename, pWidth, pHeight, pRA, pDec, pPixelSize, pImage, pFrequency, pMask, FLOAT, pDirectionType, pStokesImages );
 				
 } // CasacoreInterface::WriteCasaImage
 
-void CasacoreInterface::WriteCasaImage( const char * pFilename, int pWidth, int pHeight, double pRA, double pDec,
-						double pPixelSize, complex<float> * pImage, double pFrequency, bool * pMask )
+void CasacoreInterface::WriteCasaImage( char * pFilename, int pWidth, int pHeight, double pRA, double pDec,
+						double pPixelSize, complex<float> * pImage, double pFrequency, bool * pMask, directionType pDirectionType, int pStokesImages )
 {
 	
-	writeCasaImage( pFilename, pWidth, pHeight, pRA, pDec, pPixelSize, pImage, pFrequency, pMask, COMPLEX_FLOAT );
+	writeCasaImage( pFilename, pWidth, pHeight, pRA, pDec, pPixelSize, pImage, pFrequency, pMask, COMPLEX_FLOAT, pDirectionType, pStokesImages );
 				
 } // CasacoreInterface::WriteCasaImage
 
@@ -699,13 +699,13 @@ void CasacoreInterface::ReadCasaImage( const char * pFilename )
 //	write an image to a casa image.
 //
 		
-void CasacoreInterface::writeCasaImage( const char * pFilename, int pWidth, int pHeight, double pRA,
+void CasacoreInterface::writeCasaImage( char * pFilename, int pWidth, int pHeight, double pRA,
 						double pDec, double pPixelSize, void * pImage,
-						double pFrequency, bool * pMask, ffttype pFFTType )
+						double pFrequency, bool * pMask, ffttype pFFTType, directionType pDirectionType, int pStokesImages )
 {
 
 	// image size.
-	IPosition imageSize = IPosition( 4, pWidth, pHeight, 1, 1 );
+	IPosition imageSize = IPosition( 4, pWidth, pHeight, pStokesImages, 1 );
 
 	// create a tiled shape.
 	TiledShape outShape( imageSize );
@@ -719,9 +719,10 @@ void CasacoreInterface::writeCasaImage( const char * pFilename, int pWidth, int 
 	dirTransform( 1, 1 ) = 1;
 
 	// create a new direction coordinate.
-	DirectionCoordinate outDirectionCoordinate(	MDirection::J2000, 
+	DirectionCoordinate outDirectionCoordinate(	(pDirectionType == J2000 ? MDirection::J2000 : MDirection::AZELGEO), 
 							Projection( Projection::SIN ),
 							pRA * PI / (double) 180.0, pDec * PI / (double) 180.0,
+//							(pDirectionType == J2000 ? -1 : +1) * pPixelSize * PI / ((double) 180.0 * (double) 3600.0),
 							-pPixelSize * PI / ((double) 180.0 * (double) 3600.0),
 							pPixelSize * PI / ((double) 180.0 * (double) 3600.0),
 							dirTransform,
@@ -732,7 +733,14 @@ void CasacoreInterface::writeCasaImage( const char * pFilename, int pWidth, int 
 	outDirectionCoordinate.setWorldAxisUnits( outUnits );
 
 	casacore::Vector<int> whichStokes( 4 );
-	whichStokes( 0 ) = Stokes::I; whichStokes( 1 ) = Stokes::Q; whichStokes( 2 ) = Stokes::U; whichStokes( 3 ) = Stokes::V;
+	if (pDirectionType == J2000)
+	{
+		whichStokes( 0 ) = Stokes::I; whichStokes( 1 ) = Stokes::Q; whichStokes( 2 ) = Stokes::U; whichStokes( 3 ) = Stokes::V;
+	}
+	else
+	{
+		whichStokes( 0 ) = Stokes::XX; whichStokes( 1 ) = Stokes::XY; whichStokes( 2 ) = Stokes::YX; whichStokes( 3 ) = Stokes::YY;
+	}
 	StokesCoordinate outStokesCoordinate( whichStokes );
 
 	// create a new spectral coordinate.
@@ -762,28 +770,25 @@ void CasacoreInterface::writeCasaImage( const char * pFilename, int pWidth, int 
 	long int ptr = 0;
 	for ( int j = 0; j < pHeight; j++ )
 		for ( int i = 0; i < pWidth; i++, ptr++ )
-		{
-			
-			IPosition arrayPos( 4, i, j, 0, 0 );
-//			if (pFFTType == COMPLEX)
-//				outPixels( arrayPos ) = (float) real( ((complex<double> *) pImage)[ ptr ] );
-//			else if (pFFTType == DOUBLE)
-//				outPixels( arrayPos ) = (float) (((double *) pImage)[ ptr ]);
-//			else if (pFFTType == FLOAT)
-//				outPixels( arrayPos ) = (float) (((float *) pImage)[ ptr ]);
-//			else if (pFFTType == COMPLEX_FLOAT)
-//				outPixels( arrayPos ) = (float) real( ((complex<float> *) pImage)[ ptr ] );
-			if (pMask == NULL)
-				outMask( arrayPos ) = true;
-			else
-				outMask( arrayPos ) = (pMask[ ptr ]);
-			
-		}
+			for ( int stokes = 0; stokes < pStokesImages; stokes++ )
+			{
+				
+				IPosition arrayPos( 4, i, j, stokes, 0 );
+				if (pMask == NULL)
+					outMask( arrayPos ) = true;
+				else
+					outMask( arrayPos ) = (pMask[ ptr ]);
+				
+			}
 
 	// create an IO object?
 	LogIO outIO;
 
 	ImageUtilities * imageUtilities = new ImageUtilities();
+
+	// append file extension.
+	const char FILE_EXTENSION[] = ".image";
+	strcat( pFilename, FILE_EXTENSION );
 
 	// write the image to a casa image directory (AIPSPP).
 	imageUtilities->writeImage(	outShape,
@@ -1450,7 +1455,7 @@ void CasacoreInterface::getVisibilities( const char * pFilename, char * pFieldID
 
 			}
 
-			printf( "\rloading visibilities.....%3d%%", (int) ((double) (pCurrentSample + sampleOffset + numSamples) * 100.0 /
+			printf( "\rloading...%3d%%", (int) ((double) (pCurrentSample + sampleOffset + numSamples) * 100.0 /
 										(double) pTotalSamples) );
 			fflush( stdout );
 

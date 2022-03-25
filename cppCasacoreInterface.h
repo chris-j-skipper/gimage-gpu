@@ -23,6 +23,9 @@ class CasacoreInterface
 
 		// get instance.
 		static CasacoreInterface * getInstance();
+
+		// enumerated types.
+		enum directionType { J2000, AZEL };
 	
 		// load bitmap
 		bool LoadBitmap( const char * pFilename, std::complex<double> ** pImageData );
@@ -38,14 +41,14 @@ class CasacoreInterface
 		void ReadCasaImage( const char * pFilename );
 		
 		// write a casa image
-		void WriteCasaImage( const char * pFilename, int pWidth, int pHeight, double pRA, double pDec,
-					double pPixelSize, std::complex<double> * pImage, double pFrequency, bool * pMask );
-		void WriteCasaImage( const char * pFilename, int pWidth, int pHeight, double pRA, double pDec,
-					double pPixelSize, double * pImage, double pFrequency, bool * pMask );
-		void WriteCasaImage( const char * pFilename, int pWidth, int pHeight, double pRA, double pDec,
-					double pPixelSize, float * pImage, double pFrequency, bool * pMask );
-		void WriteCasaImage( const char * pFilename, int pWidth, int pHeight, double pRA, double pDec,
-					double pPixelSize, std::complex<float> * pImage, double pFrequency, bool * pMask );
+		void WriteCasaImage( char * pFilename, int pWidth, int pHeight, double pRA, double pDec,
+					double pPixelSize, std::complex<double> * pImage, double pFrequency, bool * pMask, directionType pDirectionType, int pStokesImages );
+		void WriteCasaImage( char * pFilename, int pWidth, int pHeight, double pRA, double pDec,
+					double pPixelSize, double * pImage, double pFrequency, bool * pMask, directionType pDirectionType, int pStokesImages );
+		void WriteCasaImage( char * pFilename, int pWidth, int pHeight, double pRA, double pDec,
+					double pPixelSize, float * pImage, double pFrequency, bool * pMask, directionType pDirectionType, int pStokesImages );
+		void WriteCasaImage( char * pFilename, int pWidth, int pHeight, double pRA, double pDec,
+					double pPixelSize, std::complex<float> * pImage, double pFrequency, bool * pMask, directionType pDirectionType, int pStokesImages );
 						
 		// count the number of antennae in the measurement set.
 		int NumberOfAntennae( const char * pMeasurementSet );
@@ -114,8 +117,8 @@ class CasacoreInterface
 					double * pImageScale );
 		
 		// write a casa image.
-		void writeCasaImage( const char * pFilename, int pWidth, int pHeight, double pRA, double pDec,
-					double pPixelSize, void * pImage, double pFrequency, bool * pMask, ffttype pFFTType );
+		void writeCasaImage( char * pFilename, int pWidth, int pHeight, double pRA, double pDec,
+					double pPixelSize, void * pImage, double pFrequency, bool * pMask, ffttype pFFTType, directionType pDirectionType, int pStokesImages );
 
 		// get all the antennae from the file, including the flagged ones.
 		int getAntennae( const char * pMeasurementSet, double ** pDishDiameter, bool ** pFlagged );

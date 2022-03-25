@@ -154,13 +154,10 @@ class Reprojection
 
 		void CreateDeviceMemory( rpVectI pOutSize );
 		void GetCoordinates( double pX, double pY, rpCoordSys pCoordinateSystem, rpVectI pSize, double * pPhaseRA, double * pPhaseDEC );
-		void ReprojectImage( float * pdevInImage, float * pdevOutImage, float * pdevNormalisationPattern, float * pdevPrimaryBeamPattern,
-					rpCoordSys pInCoordinateSystem, rpCoordSys pOutCoordinateSystem, rpVectI pInSize, rpVectI pOutSize, bool * pdevInMask,
-					float * pdevBeamIn, float * pdevBeamOut, rpVectI pBeamSize, ProjectionDirection pProjectionDirection,
-					bool pAProjection, bool pVerbose );
+		void ReprojectImage( float * pdevInImage, float * pdevOutImage, rpCoordSys pInCoordinateSystem, rpCoordSys pOutCoordinateSystem, rpVectI pInSize,
+					rpVectI pOutSize, bool * pdevInMask, float * pdevBeamIn, float * pdevBeamOut, rpVectI pBeamSize,
+					ProjectionDirection pProjectionDirection, bool pAProjection, bool pVerbose );
 		void ReprojectPixel( double * pPixel, int pNumPixels, rpCoordSys pInCoordinateSystem, rpCoordSys pOutCoordinateSystem, rpVectI pInSize, rpVectI pOutSize );
-		void ReweightImage( float * pdevOutImage, float * pdevNormalisationPattern, float * pdevPrimaryBeamPattern, rpVectI pOutSize, bool * pdevOutMask,
-					rpVectI pBeamSize );
 
 	private:
 
@@ -256,8 +253,7 @@ class Reprojection
 //	REPROJECTION AND REGRIDDING FUNCTIONS
 //
 
-		void reprojection( float * pdevInImage, float * pdevOutImage, float * pdevNormalisationPattern, float * pdevPrimaryBeamPattern,
-					bool * pdevInMask, float * pdevBeamIn, float * pdevBeamOut, rpVectI pBeamSize, ProjectionDirection pProjectionDirection,
-					bool pAProjection );
+		void reprojection( float * pdevInImage, float * pdevOutImage, bool * pdevInMask, float * pdevBeamIn, float * pdevBeamOut, rpVectI pBeamSize,
+					ProjectionDirection pProjectionDirection, bool pAProjection );
 
 }; // Reprojection
