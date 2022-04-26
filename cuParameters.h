@@ -112,6 +112,7 @@ class Parameters
 		int BeamInSize;
 		double BeamInCellSize;
 		char ** BeamPattern;			// the file or files with the primary beam patterns.
+		bool BeamStokes;			// true if the beam patterns are the Stokes beam patterns I, Q, U and V, or false if they're XX, XY, YX, YY.
 		beamtype BeamType;			// the primary beam type - can be AIRY, GAUSSIAN, or FROMFILE if it's being loaded.
 		int * BeamID;				// the ASKAP PAF beam ID for each measurement set.
 		
@@ -191,6 +192,7 @@ class Parameters
 		static const char AIRY_DISK_DIAMETER[];
 		static const char AIRY_DISK_BLOCKAGE[];
 		static const char BEAM_PATTERN[];
+		static const char BEAM_STOKES[];
 		static const char BEAM_SIZE_PIXELS[];
 		static const char BEAM_CELL_SIZE[];
 		static const char BEAM_TYPE[];

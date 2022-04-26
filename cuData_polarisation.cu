@@ -123,9 +123,9 @@ __global__ void devCalculateGridPositions
 __global__ void devCalculateVisibility
 			(
 			cufftComplex * pVisibilityIn,			// contains all polarisation products
-			cufftComplex * pVisibilityOut,		// the Stokes I, Q, U or V visibility
+			cufftComplex * pVisibilityOut,			// the Stokes I, Q, U or V visibility
 			int pNumPolarisations,				// the number of polarisation products
-			double * pMultiplier,				// a list of constants for each polarisation product. i.e. for Stokes I we might have (0.5, 0, 0, 0.5).
+			cufftDoubleComplex * pMultiplier,		// a list of constants for each polarisation product. i.e. for Stokes I we might have (0.5, 0, 0, 0.5).
 			int * pPolarisationConfig,			// a list of polarisation configurations, indexed by sample ID
 			int * pSampleID,
 			long int pVisibilityBatchSize			// the number of visibilities to process
@@ -145,12 +145,12 @@ __global__ void devCalculateVisibility
 		cufftComplex value; value.x = 0.0; value.y = 0.0;
 		for ( int polarisation = 0; polarisation < pNumPolarisations; polarisation++ )
 		{
-			double tmpMultiplier = pMultiplier[ (polarisationConfig * pNumPolarisations) + polarisation ];
-			if (tmpMultiplier != 0.0)
+			cufftDoubleComplex tmpMultiplier = pMultiplier[ (polarisationConfig * pNumPolarisations) + polarisation ];
+			if (cuCabs( tmpMultiplier ) != 0.0)
 			{
 				cufftComplex tmp = pVisibilityIn[ (index * pNumPolarisations) + polarisation ];
-				value.x += (tmp.x * tmpMultiplier);
-				value.y += (tmp.y * tmpMultiplier);
+				value.x += (tmp.x * tmpMultiplier.x) - (tmp.y * tmpMultiplier.y);
+				value.y += (tmp.y * tmpMultiplier.x) + (tmp.x * tmpMultiplier.y);
 			}
 		}
 		pVisibilityOut[ index ] = value;
@@ -169,13 +169,13 @@ __global__ void devCalculateVisibility
 
 __global__ void devCalculateFlag
 			(
-			bool * pFlagIn,				// flags for all polarisation products
+			bool * pFlagIn,					// flags for all polarisation products
 			bool * pFlagOut,				// the combined flag
 			int pNumPolarisations,				// the number of polarisation products
-			double * pMultiplier,				// a list of constants for each polarisation product. i.e. for Stokes I we might have (0.5, 0, 0, 0.5).
+			cufftDoubleComplex * pMultiplier,		// a list of constants for each polarisation product. i.e. for Stokes I we might have (0.5, 0, 0, 0.5).
 			int * pPolarisationConfig,			// a list of polarisation configurations, indexed by sample ID
 			int * pSampleID,
-			long int pVisibilityBatchSize,		// the number of visibilities to process
+			long int pVisibilityBatchSize,			// the number of visibilities to process
 			bool pFullStokes				// true if we're creating images for all Stokes products. in this case we need to check all the
 									//	polarisation flags, not just those where the multiplier is > 0.
 			)
@@ -194,7 +194,7 @@ __global__ void devCalculateFlag
 
 		// calculate flag.
 		for ( int polarisation = 0; polarisation < pNumPolarisations; polarisation++ )
-			if (pMultiplier[ (polarisationConfig * pNumPolarisations) + polarisation ] != 0.0 || pFullStokes == true)
+			if (cuCabs( pMultiplier[ (polarisationConfig * pNumPolarisations) + polarisation ] ) != 0.0 || pFullStokes == true)
 				flag = flag || (pFlagIn[ (index * pNumPolarisations) + polarisation ] == true);
 		pFlagOut[ index ] = flag;
 
@@ -589,14 +589,14 @@ __global__ void devTakeConjugateVisibility( cufftComplex * pVisibility, long int
 //
 
 //
-//	Data::Data()
+//	Data::Data_init()
 //
 //	CJS: 20/08/2021
 //
 //	The constructor.
 //
 
-Data::Data()
+void Data::Data_init()
 {
 
 	// create instances of casacore
@@ -605,7 +605,7 @@ Data::Data()
 	// create instances of casacore
 	_param = Parameters::getInstance();
 
-	_mosaicID = -1;
+	MosaicID = -1;
 	_taylorTerms = 1;
 	_wProjection = false;
 	_aProjection = false;
@@ -615,6 +615,7 @@ Data::Data()
 	_stokes = STOKES_I;
 	_stokesImages = 1;
 
+	PBChannelWavelength = NULL;
 	NextComponent = NULL;
 	NumVisibilities = NULL;
 	Batches = NULL;
@@ -635,10 +636,10 @@ Data::Data()
 	MaximumWavelength = 1.0;
 
 	// primary beams.
+	LoadedPrimaryBeam = false;
 	AveragePrimaryBeamIn = NULL;
 	PrimaryBeam = NULL;			// this primary beam is used for mosaicing, and also for setting the image mask. it is in the reference frame of the
 						// 	output phase position.
-	PrimaryBeamRatio = NULL;		// this primary beam is used to re-scale the flux so that every channel appears to have the same primary beam.
 	PrimaryBeamInFrame = NULL;		// this primary beam is shown in the reference frame of each mosaic component (used for image-plane mosaicing).
 	
 	MuellerDeterminant = NULL;
@@ -667,6 +668,21 @@ Data::Data()
 	PhaseToRA = 0.0;
 	PhaseToDEC = 0.0;
 
+} // Data::Data_init
+
+//
+//	Data::Data()
+//
+//	CJS: 20/08/2021
+//
+//	The constructor.
+//
+
+Data::Data()
+{
+
+	Data_init();
+
 } // Data::Data
 
 Data::Data
@@ -684,7 +700,8 @@ Data::Data
 {
 
 	// initialise default values.
-	new (this) Data();
+	//new (this) Data();
+	Data_init();
 
 	// set up the object.
 	Create( pTaylorTerms, pMosaicID, pWProjection, pAProjection, pWPlanes, pPBChannels, pCacheData, pStokes, pStokesImages );
@@ -769,8 +786,6 @@ Data::~Data()
 		free( (void *) AveragePrimaryBeamIn );
 	if (PrimaryBeam != NULL)
 		free( (void *) PrimaryBeam );
-	if (PrimaryBeamRatio != NULL)
-		free( (void *) PrimaryBeamRatio );
 	if (PrimaryBeamInFrame != NULL)
 		free( (void *) PrimaryBeamInFrame );
 	if (FieldID != NULL)
@@ -793,11 +808,13 @@ Data::~Data()
 		free( (void *) MuellerDeterminant );
 	if (_muellerDeterminantIn != NULL)
 		free( (void *) _muellerDeterminantIn );
+	if (PBChannelWavelength != NULL)
+		free( (void *) PBChannelWavelength );
 
 	// free the Jones and Mueller matrices if they haven't already been released.
 	FreeJonesMatrices();
 	FreeMuellerMatrices();
-	
+
 	if (JonesMatrixIn != NULL)
 		free( (void *) JonesMatrixIn );
 
@@ -898,9 +915,9 @@ void Data::CacheData
 
 	// build the full filename.
 	if (_param->CacheLocation[0] != '\0')
-		sprintf( filename, "%s%s-%i-%i-cache.dat", _param->CacheLocation, _param->OutputPrefix, _mosaicID, pBatchID );
+		sprintf( filename, "%s%s-%i-%i-cache.dat", _param->CacheLocation, _param->OutputPrefix, MosaicID, pBatchID );
 	else
-		sprintf( filename, "%s-%i-%i-cache.dat", _param->OutputPrefix, _mosaicID, pBatchID );
+		sprintf( filename, "%s-%i-%i-cache.dat", _param->OutputPrefix, MosaicID, pBatchID );
 
 	// open the file for writing.
 	FILE * fr;
@@ -1016,13 +1033,20 @@ cufftDoubleComplex ** Data::ConvertJonesToMueller
 
 	// step 1:	construct the 4x4 matrix, M1, that is the outer product of the Jones matrix with the conjugate of itself.
 	//
-	//			( XX*' ) = M . ( XX* ),	where	M1 = J (x) J*     (outer product)
+	//			( XX*' ) = M1 . ( XX* ),	where	M1 = J (x) J*	(outer product)
 	//			( XY*' )       ( XY* )
 	//			( YX*' )       ( YX* )
 	//			( YY*' )       ( YY* )
 	//
 	//		the primed variables, XX*', XY*', YX*', and YY*' are the observed signals. the unprimed variables are the true 'sky' signals, i.e. without
 	//		the beam patterns or leakage. we want to solve for these unprimed values.
+	//
+	//		if we've already got the Stokes beams then the equation will be
+	//
+	//			( I' ) = M1 . ( I ),		where	M1 = J (x) J*	(outer product)
+	//			( Q' )        ( Q )
+	//			( U' )        ( U )
+	//                     ( V' )        ( V )
 	//
 	cufftDoubleComplex ** devM1 = outerProductImageMatrix(	/* pOne = */ devJonesMatrix,
 									/* pTwo = */ devJonesConj,
@@ -1046,255 +1070,266 @@ cufftDoubleComplex ** Data::ConvertJonesToMueller
 		free( (void *) devJonesConj );
 	}
 	
-	// step 2:	construct the 4x4 matrix, M2, that converts XX,XY,YX,YY into I',Q',U',V'.
-	//
-	//			( I' ) = 1/2 ( XX*' + YY*' ) = M2 . ( XX* )
-	//			( Q' )       ( XX*' - YY*' )        ( XY* )
-	//			( U' )       ( YX*' + XY*' )        ( YX* )
-	//			( V' )       ( YX*' - XY*' )        ( YY* )
-	//	
-	// 		the summation we want is:
-	//
-	//			M2[0]  = M1[0] + M1[12]	M2[1]  = M1[1] + M1[13]	M2[2]  = M1[2] + M1[14]	M2[3]  = M1[3] + M1[15]
-	//			M2[4]  = M1[0] - M1[12]	M2[5]  = M1[1] - M1[13]	M2[6]  = M1[2] - M1[14]	M2[7]  = M1[3] - M1[15]
-	//			M2[8]  = M1[8] + M1[4]		M2[9]  = M1[9] + M1[5]		M2[10] = M1[10] + M1[6]	M2[11] = M1[11] + M1[7]
-	//			M2[12] = M1[8] - M1[4]		M2[13] = M1[9] - M1[5]		M2[14] = M1[10] - M1[6]	M2[15] = M1[11] - M1[7]
-	//
-
-	cufftDoubleComplex ** devM2 = (cufftDoubleComplex **) malloc( 16 * sizeof( cufftDoubleComplex * ) );
-	for ( int col = 0; col < 4; col++ )
+	// if we already have the Stokes beams then we don't need to do anything else. if the beams we have are XX, XY, YX and YY then we need some further
+	// manipulation to get the Stokes beams.
+	cufftDoubleComplex ** devMuellerMatrix = NULL;
+	if (_param->BeamStokes == true || LoadedPrimaryBeam == false)
+		devMuellerMatrix = devM1;
+		
+	else
 	{
-		for ( int row = 0; row < 4; row++ )
-			devM2[ (row * 4) + col ] = NULL;
-		if (devM1[ col ] != NULL || devM1[ col + 12 ] != NULL)
-			for ( int row = 0; row < 2; row++ )
-				reserveGPUMemory( (void **) &devM2[ (row * 4) + col ], pImageSize * pImageSize * sizeof( cufftDoubleComplex ),
-														"reserving device memory for M2 matrix cell", __LINE__ );
-		if (devM1[ col + 4 ] != NULL || devM1[ col + 8 ] != NULL)
-			for ( int row = 2; row < 4; row++ )
-				reserveGPUMemory( (void **) &devM2[ (row * 4) + col ], pImageSize * pImageSize * sizeof( cufftDoubleComplex ),
-														"reserving device memory for M2 matrix cell", __LINE__ );
-	}
+	
+		// step 2:	construct the 4x4 matrix, M2, that converts XX,XY,YX,YY into I',Q',U',V'.
+		//
+		//			( I' ) = 1/2 ( XX*' + YY*' ) = M2 . ( XX* )
+		//			( Q' )       ( XX*' - YY*' )        ( XY* )
+		//			( U' )       ( YX*' + XY*' )        ( YX* )
+		//			( V' )       ( YX*' - XY*' )        ( YY* )
+		//	
+		// 		the summation we want is:
+		//
+		//			M2[0]  = M1[0] + M1[12]	M2[1]  = M1[1] + M1[13]	M2[2]  = M1[2] + M1[14]	M2[3]  = M1[3] + M1[15]
+		//			M2[4]  = M1[0] - M1[12]	M2[5]  = M1[1] - M1[13]	M2[6]  = M1[2] - M1[14]	M2[7]  = M1[3] - M1[15]
+		//			M2[8]  = M1[8] + M1[4]		M2[9]  = M1[9] + M1[5]		M2[10] = M1[10] + M1[6]	M2[11] = M1[11] + M1[7]
+		//			M2[12] = M1[8] - M1[4]		M2[13] = M1[9] - M1[5]		M2[14] = M1[10] - M1[6]	M2[15] = M1[11] - M1[7]
+		//
 
-	// copy an image into each cell.
-	for ( int row = 0; row < 2; row++ )
+		cufftDoubleComplex ** devM2 = (cufftDoubleComplex **) malloc( 16 * sizeof( cufftDoubleComplex * ) );
 		for ( int col = 0; col < 4; col++ )
 		{
-			if (devM2[ (row * 4) + col ] != NULL)
-			{
-				if (devM1[ col ] != NULL)
-					cudaMemcpy( (void *) devM2[ (row * 4) + col ], (void *) devM1[ col ], pImageSize * pImageSize * sizeof( cufftDoubleComplex ),
-							cudaMemcpyDeviceToDevice );
-				else
-					cudaMemset( (void *) devM2[ (row * 4) + col ], 0, pImageSize * pImageSize * sizeof( cufftDoubleComplex ) );
-			}
-			if (devM2[ (row * 4) + col + 8 ] != NULL)
-			{
-				if (devM1[ col + 8 ] != NULL)
-					cudaMemcpy( (void *) devM2[ (row * 4) + col + 8 ], (void *) devM1[ col + 8 ],
-										pImageSize * pImageSize * sizeof( cufftDoubleComplex ), cudaMemcpyDeviceToDevice );
-				else
-					cudaMemset( (void *) devM2[ (row * 4) + col + 8 ], 0, pImageSize * pImageSize * sizeof( cufftDoubleComplex ) );
-			}
+			for ( int row = 0; row < 4; row++ )
+				devM2[ (row * 4) + col ] = NULL;
+			if (devM1[ col ] != NULL || devM1[ col + 12 ] != NULL)
+				for ( int row = 0; row < 2; row++ )
+					reserveGPUMemory( (void **) &devM2[ (row * 4) + col ], pImageSize * pImageSize * sizeof( cufftDoubleComplex ),
+															"reserving device memory for M2 matrix cell", __LINE__ );
+			if (devM1[ col + 4 ] != NULL || devM1[ col + 8 ] != NULL)
+				for ( int row = 2; row < 4; row++ )
+					reserveGPUMemory( (void **) &devM2[ (row * 4) + col ], pImageSize * pImageSize * sizeof( cufftDoubleComplex ),
+															"reserving device memory for M2 matrix cell", __LINE__ );
 		}
 
-	for ( int i = 0; i < stages; i++ )
-	{
+		// copy an image into each cell.
+		for ( int row = 0; row < 2; row++ )
+			for ( int col = 0; col < 4; col++ )
+			{
+				if (devM2[ (row * 4) + col ] != NULL)
+				{
+					if (devM1[ col ] != NULL)
+						cudaMemcpy( (void *) devM2[ (row * 4) + col ], (void *) devM1[ col ], pImageSize * pImageSize * sizeof( cufftDoubleComplex ),
+								cudaMemcpyDeviceToDevice );
+					else
+						cudaMemset( (void *) devM2[ (row * 4) + col ], 0, pImageSize * pImageSize * sizeof( cufftDoubleComplex ) );
+				}
+				if (devM2[ (row * 4) + col + 8 ] != NULL)
+				{
+					if (devM1[ col + 8 ] != NULL)
+						cudaMemcpy( (void *) devM2[ (row * 4) + col + 8 ], (void *) devM1[ col + 8 ],
+											pImageSize * pImageSize * sizeof( cufftDoubleComplex ), cudaMemcpyDeviceToDevice );
+					else
+						cudaMemset( (void *) devM2[ (row * 4) + col + 8 ], 0, pImageSize * pImageSize * sizeof( cufftDoubleComplex ) );
+				}
+			}
 
-		// define the block/thread dimensions.
-		int itemsThisStage = items - (i * MAX_THREADS);
-		if (itemsThisStage > MAX_THREADS)
-			itemsThisStage = MAX_THREADS;
-		int threads = itemsThisStage;
-		int blocks;
-		setThreadBlockSize1D( &threads, &blocks );
-
-		// add the second image to the first for each cell.
-		for ( int col = 0; col < 4; col++ )		
+		for ( int i = 0; i < stages; i++ )
 		{
-			if (devM1[ col + 12 ] != NULL && devM2[ col ] != NULL)
-				devAddArrays<<< blocks, threads >>>(		/* pOne = */ &devM2[ col ][ /* CELL = */ i * MAX_THREADS ],
-										/* pTwo = */ &devM1[ col + 12 ][ /* CELL = */ i * MAX_THREADS ],
-										/* pSize = */ itemsThisStage );
-			if (devM1[ col + 12 ] != NULL && devM2[ col + 4 ] != NULL)
-				devSubtractArrays<<< blocks, threads >>>(	/* pOne = */ &devM2[ col + 4 ][ /* CELL = */ i * MAX_THREADS ],
-										/* pTwo = */ &devM1[ col + 12 ][ /* CELL = */ i * MAX_THREADS ],
-										/* pSize = */ itemsThisStage );
-			if (devM1[ col + 4 ] != NULL && devM2[ col + 8 ] != NULL)
-				devAddArrays<<< blocks, threads >>>(		/* pOne = */ &devM2[ col + 8 ][ /* CELL = */ i * MAX_THREADS ],
-										/* pTwo = */ &devM1[ col + 4 ][ /* CELL = */ i * MAX_THREADS ],
-										/* pSize = */ itemsThisStage );
-			if (devM1[ col + 4 ] != NULL && devM2[ col + 12 ] != NULL)
-				devSubtractArrays<<< blocks, threads >>>(	/* pOne = */ &devM2[ col + 12 ][ /* CELL = */ i * MAX_THREADS ],
-										/* pTwo = */ &devM1[ col + 4 ][ /* CELL = */ i * MAX_THREADS ],
-										/* pSize = */ itemsThisStage );
-		}
-								
-	} // LOOP: i
 
-	// divide the images by 2 to include the factor of 2 we find in Stokes I = (XX + YY) / 2.
-	for ( int cell = 0; cell < 16; cell++ )
-		if (devM2[ cell ] != NULL)
-			devMultiplyImages<<< _gridSize2D, _blockSize2D >>>(	/* pOne = */ devM2[ cell ],
-										/* pScalar = */ 0.5,
-										/* pMask = */ NULL,
-										/* pSizeOne = */ pImageSize );
+			// define the block/thread dimensions.
+			int itemsThisStage = items - (i * MAX_THREADS);
+			if (itemsThisStage > MAX_THREADS)
+				itemsThisStage = MAX_THREADS;
+			int threads = itemsThisStage;
+			int blocks;
+			setThreadBlockSize1D( &threads, &blocks );
 
-	// free memory.
-	if (devM1 != NULL)
-	{
+			// add the second image to the first for each cell.
+			for ( int col = 0; col < 4; col++ )		
+			{
+				if (devM1[ col + 12 ] != NULL && devM2[ col ] != NULL)
+					devAddArrays<<< blocks, threads >>>(		/* pOne = */ &devM2[ col ][ /* CELL = */ i * MAX_THREADS ],
+											/* pTwo = */ &devM1[ col + 12 ][ /* CELL = */ i * MAX_THREADS ],
+											/* pSize = */ itemsThisStage );
+				if (devM1[ col + 12 ] != NULL && devM2[ col + 4 ] != NULL)
+					devSubtractArrays<<< blocks, threads >>>(	/* pOne = */ &devM2[ col + 4 ][ /* CELL = */ i * MAX_THREADS ],
+											/* pTwo = */ &devM1[ col + 12 ][ /* CELL = */ i * MAX_THREADS ],
+											/* pSize = */ itemsThisStage );
+				if (devM1[ col + 4 ] != NULL && devM2[ col + 8 ] != NULL)
+					devAddArrays<<< blocks, threads >>>(		/* pOne = */ &devM2[ col + 8 ][ /* CELL = */ i * MAX_THREADS ],
+											/* pTwo = */ &devM1[ col + 4 ][ /* CELL = */ i * MAX_THREADS ],
+											/* pSize = */ itemsThisStage );
+				if (devM1[ col + 4 ] != NULL && devM2[ col + 12 ] != NULL)
+					devSubtractArrays<<< blocks, threads >>>(	/* pOne = */ &devM2[ col + 12 ][ /* CELL = */ i * MAX_THREADS ],
+											/* pTwo = */ &devM1[ col + 4 ][ /* CELL = */ i * MAX_THREADS ],
+											/* pSize = */ itemsThisStage );
+			}
+									
+		} // LOOP: i
+
+		// divide the images by 2 to include the factor of 2 we find in Stokes I = (XX + YY) / 2.
 		for ( int cell = 0; cell < 16; cell++ )
-			if (devM1[ cell ] != NULL)
-				cudaFree( (void *) devM1[ cell ] );
-		free( (void *) devM1 );
-	}
+			if (devM2[ cell ] != NULL)
+				devMultiplyImages<<< _gridSize2D, _blockSize2D >>>(	/* pOne = */ devM2[ cell ],
+											/* pScalar = */ 0.5,
+											/* pMask = */ NULL,
+											/* pSizeOne = */ pImageSize );
 
-	// step 3:	calculate M3 as the inverse of M2.
-	//
-	//			( XX* ) = M3 . ( I' )
-	//			( XY* )        ( Q' )
-	//			( YX* )        ( U' )
-	//			( YY* )        ( V' )
-	//
-	cufftDoubleComplex ** devM3 = calculateInverseImageMatrix(	/* pdevMatrix = */ devM2,
+		// free memory.
+		if (devM1 != NULL)
+		{
+			for ( int cell = 0; cell < 16; cell++ )
+				if (devM1[ cell ] != NULL)
+					cudaFree( (void *) devM1[ cell ] );
+			free( (void *) devM1 );
+		}
+
+		// step 3:	calculate M3 as the inverse of M2.
+		//
+		//			( XX* ) = M3 . ( I' )
+		//			( XY* )        ( Q' )
+		//			( YX* )        ( U' )
+		//			( YY* )        ( V' )
+		//
+		cufftDoubleComplex ** devM3 = calculateInverseImageMatrix(	/* pdevMatrix = */ devM2,
+										/* pMatrixSize = */ 4,
+										/* pImageSize = */ pImageSize,
+										/* pDivideByDeterminant = */ true );
+
+		// free memory.
+		if (devM2 != NULL)
+		{
+			for ( int cell = 0; cell < 16; cell++ )
+				if (devM2[ cell ] != NULL)
+					cudaFree( (void *) devM2[ cell ] );
+			free( (void *) devM2 );
+		}
+
+		// step 3:	construct the 4x4 inverse Mueller matrix, that converts I',Q',U',V' into I,Q,U,V. this is the Mueller matrix, which provides the gridding
+		//		kernels through Fourier transform of each matrix cell. the top row, for example, consists of the Stokes I beam pattern, and the leakage of Q,
+		//		U, and V into I.
+		//
+		//			( I ) = 1/2 ( XX* + YY* ) = Mu^{-1} . ( I' )
+		//			( Q )       ( XX* - YY* )             ( Q' )
+		//			( U )       ( YX* + XY* )             ( U' )
+		//			( V )       ( YX* - XY* )             ( V' )
+		//
+		// 		the summation we want is:
+		//
+		//			Mu[0]  = M2[0] + M2[12]	Mu[1]  = M2[1] + M2[13]	Mu[2]  = M2[2] + M2[14]	Mu[3]  = M2[3] + M2[15]
+		//			Mu[4]  = M2[0] - M2[12]	Mu[5]  = M2[1] - M2[13]	Mu[6]  = M2[2] - M2[14]	Mu[7]  = M2[3] - M2[15]
+		//			Mu[8]  = M2[8] + M2[4]		Mu[9]  = M2[9] + M2[5]		Mu[10] = M2[10] + M2[6]	Mu[11] = M2[11] + M2[7]
+		//			Mu[12] = M2[8] - M2[4]		Mu[13] = M2[9] - M2[5]		Mu[14] = M2[10] - M2[6]	Mu[15] = M2[11] - M2[7]
+		//
+		cufftDoubleComplex ** devInverseMuellerMatrix = (cufftDoubleComplex **) malloc( 16 * sizeof( cufftDoubleComplex * ) );
+		for ( int col = 0; col < 4; col++ )
+		{
+			for ( int row = 0; row < 4; row++ )
+				devInverseMuellerMatrix[ (row * 4) + col ] = NULL;
+			if (devM3[ col ] != NULL || devM3[ col + 12 ] != NULL)
+				for ( int row = 0; row < 2; row++ )
+					reserveGPUMemory( (void **) &devInverseMuellerMatrix[ (row * 4) + col ], pImageSize * pImageSize * sizeof( cufftDoubleComplex ),
+														"reserving device memory for Mueller matrix cell", __LINE__ );
+			if (devM3[ col + 4 ] != NULL || devM3[ col + 8 ] != NULL)
+				for ( int row = 2; row < 4; row++ )
+					reserveGPUMemory( (void **) &devInverseMuellerMatrix[ (row * 4) + col ], pImageSize * pImageSize * sizeof( cufftDoubleComplex ),
+														"reserving device memory for Mueller matrix cell", __LINE__ );
+		}
+
+		// copy an image into each cell.
+		for ( int row = 0; row < 2; row++ )
+			for ( int col = 0; col < 4; col++ )
+			{
+				if (devInverseMuellerMatrix[ (row * 4) + col ] != NULL)
+				{
+					if (devM3[ col ] != NULL)
+						cudaMemcpy( (void *) devInverseMuellerMatrix[ (row * 4) + col ], (void *) devM3[ col ],
+								pImageSize * pImageSize * sizeof( cufftDoubleComplex ), cudaMemcpyDeviceToDevice );
+					else
+						cudaMemset( (void *) devInverseMuellerMatrix[ (row * 4) + col ], 0, pImageSize * pImageSize * sizeof( cufftDoubleComplex ) );
+				}
+				if (devInverseMuellerMatrix[ (row * 4) + col + 8 ] != NULL)
+				{
+					if (devM3[ col + 8 ] != NULL)
+						cudaMemcpy( (void *) devInverseMuellerMatrix[ (row * 4) + col + 8 ], (void *) devM3[ col + 8 ],
+								pImageSize * pImageSize * sizeof( cufftDoubleComplex ), cudaMemcpyDeviceToDevice );
+					else
+						cudaMemset( (void *) devInverseMuellerMatrix[ (row * 4) + col + 8 ], 0,
+															pImageSize * pImageSize * sizeof( cufftDoubleComplex ) );
+				}
+			}
+
+		for ( int i = 0; i < stages; i++ )
+		{
+
+			// define the block/thread dimensions.
+			int itemsThisStage = items - (i * MAX_THREADS);
+			if (itemsThisStage > MAX_THREADS)
+				itemsThisStage = MAX_THREADS;
+			int threads = itemsThisStage;
+			int blocks;
+			setThreadBlockSize1D( &threads, &blocks );
+
+			// add the second image to the first for each cell.
+			for ( int col = 0; col < 4; col++ )		
+			{
+				if (devM3[ col + 12 ] != NULL && devInverseMuellerMatrix[ col ] != NULL)
+					devAddArrays<<< blocks, threads >>>(		/* pOne = */ &devInverseMuellerMatrix[ col ][ /* CELL = */ i * MAX_THREADS ],
+											/* pTwo = */ &devM3[ col + 12 ][ /* CELL = */ i * MAX_THREADS ],
+											/* pSize = */ itemsThisStage );
+				if (devM3[ col + 12 ] != NULL && devInverseMuellerMatrix[ col + 4 ] != NULL)
+					devSubtractArrays<<< blocks, threads >>>(	/* pOne = */ &devInverseMuellerMatrix[ col + 4 ][ /* CELL = */ i * MAX_THREADS ],
+											/* pTwo = */ &devM3[ col + 12 ][ /* CELL = */ i * MAX_THREADS ],
+											/* pSize = */ itemsThisStage );
+				if (devM3[ col + 4 ] != NULL && devInverseMuellerMatrix[ col + 8 ] != NULL)
+					devAddArrays<<< blocks, threads >>>(		/* pOne = */ &devInverseMuellerMatrix[ col + 8 ][ /* CELL = */ i * MAX_THREADS ],
+											/* pTwo = */ &devM3[ col + 4 ][ /* CELL = */ i * MAX_THREADS ],
+											/* pSize = */ itemsThisStage );
+				if (devM3[ col + 4 ] != NULL && devInverseMuellerMatrix[ col + 12 ] != NULL)
+					devSubtractArrays<<< blocks, threads >>>(	/* pOne = */ &devInverseMuellerMatrix[ col + 12 ][ /* CELL = */ i * MAX_THREADS ],
+											/* pTwo = */ &devM3[ col + 4 ][ /* CELL = */ i * MAX_THREADS ],
+											/* pSize = */ itemsThisStage );
+			}
+									
+		} // LOOP: i
+
+		// divide the images by 2 to include the factor of 2 we find in Stokes I = (XX + YY) / 2.
+		for ( int cell = 0; cell < 16; cell++ )
+			if (devInverseMuellerMatrix[ cell ] != NULL)
+				devMultiplyImages<<< _gridSize2D, _blockSize2D >>>(	/* pOne = */ devInverseMuellerMatrix[ cell ],
+											/* pScalar = */ 0.5,
+											/* pMask = */ NULL,
+											/* pSizeOne = */ pImageSize );
+
+		// free memory.
+		if (devM3 != NULL)
+		{
+			for ( int cell = 0; cell < 16; cell++ )
+				if (devM3[ cell ] != NULL)
+					cudaFree( (void *) devM3[ cell ] );
+			free( (void *) devM3 );
+		}
+
+		// step 4:	calculate the Mueller matrix by taking the inverse, which we will use for degridding.
+		//
+		//			( I' ) = 1/2 ( XX* + YY* ) = Mu . ( I )
+		//			( Q' )       ( XX* - YY* )        ( Q )
+		//			( U' )       ( YX* + XY* )        ( U )
+		//			( V' )       ( YX* - XY* )        ( V )
+		//
+		devMuellerMatrix = calculateInverseImageMatrix(	/* pdevMatrix = */ devInverseMuellerMatrix,
 									/* pMatrixSize = */ 4,
 									/* pImageSize = */ pImageSize,
 									/* pDivideByDeterminant = */ true );
 
-	// free memory.
-	if (devM2 != NULL)
-	{
-		for ( int cell = 0; cell < 16; cell++ )
-			if (devM2[ cell ] != NULL)
-				cudaFree( (void *) devM2[ cell ] );
-		free( (void *) devM2 );
-	}
-
-	// step 3:	construct the 4x4 inverse Mueller matrix, that converts I',Q',U',V' into I,Q,U,V. this is the Mueller matrix, which provides the gridding
-	//		kernels through Fourier transform of each matrix cell. the top row, for example, consists of the Stokes I beam pattern, and the leakage of Q,
-	//		U, and V into I.
-	//
-	//			( I ) = 1/2 ( XX* + YY* ) = Mu^{-1} . ( I' )
-	//			( Q )       ( XX* - YY* )             ( Q' )
-	//			( U )       ( YX* + XY* )             ( U' )
-	//			( V )       ( YX* - XY* )             ( V' )
-	//
-	// 		the summation we want is:
-	//
-	//			Mu[0]  = M2[0] + M2[12]	Mu[1]  = M2[1] + M2[13]	Mu[2]  = M2[2] + M2[14]	Mu[3]  = M2[3] + M2[15]
-	//			Mu[4]  = M2[0] - M2[12]	Mu[5]  = M2[1] - M2[13]	Mu[6]  = M2[2] - M2[14]	Mu[7]  = M2[3] - M2[15]
-	//			Mu[8]  = M2[8] + M2[4]		Mu[9]  = M2[9] + M2[5]		Mu[10] = M2[10] + M2[6]	Mu[11] = M2[11] + M2[7]
-	//			Mu[12] = M2[8] - M2[4]		Mu[13] = M2[9] - M2[5]		Mu[14] = M2[10] - M2[6]	Mu[15] = M2[11] - M2[7]
-	//
-	cufftDoubleComplex ** devInverseMuellerMatrix = (cufftDoubleComplex **) malloc( 16 * sizeof( cufftDoubleComplex * ) );
-	for ( int col = 0; col < 4; col++ )
-	{
-		for ( int row = 0; row < 4; row++ )
-			devInverseMuellerMatrix[ (row * 4) + col ] = NULL;
-		if (devM3[ col ] != NULL || devM3[ col + 12 ] != NULL)
-			for ( int row = 0; row < 2; row++ )
-				reserveGPUMemory( (void **) &devInverseMuellerMatrix[ (row * 4) + col ], pImageSize * pImageSize * sizeof( cufftDoubleComplex ),
-													"reserving device memory for Mueller matrix cell", __LINE__ );
-		if (devM3[ col + 4 ] != NULL || devM3[ col + 8 ] != NULL)
-			for ( int row = 2; row < 4; row++ )
-				reserveGPUMemory( (void **) &devInverseMuellerMatrix[ (row * 4) + col ], pImageSize * pImageSize * sizeof( cufftDoubleComplex ),
-													"reserving device memory for Mueller matrix cell", __LINE__ );
-	}
-
-	// copy an image into each cell.
-	for ( int row = 0; row < 2; row++ )
-		for ( int col = 0; col < 4; col++ )
+		// free memory.
+		if (devInverseMuellerMatrix != NULL)
 		{
-			if (devInverseMuellerMatrix[ (row * 4) + col ] != NULL)
-			{
-				if (devM3[ col ] != NULL)
-					cudaMemcpy( (void *) devInverseMuellerMatrix[ (row * 4) + col ], (void *) devM3[ col ],
-							pImageSize * pImageSize * sizeof( cufftDoubleComplex ), cudaMemcpyDeviceToDevice );
-				else
-					cudaMemset( (void *) devInverseMuellerMatrix[ (row * 4) + col ], 0, pImageSize * pImageSize * sizeof( cufftDoubleComplex ) );
-			}
-			if (devInverseMuellerMatrix[ (row * 4) + col + 8 ] != NULL)
-			{
-				if (devM3[ col + 8 ] != NULL)
-					cudaMemcpy( (void *) devInverseMuellerMatrix[ (row * 4) + col + 8 ], (void *) devM3[ col + 8 ],
-							pImageSize * pImageSize * sizeof( cufftDoubleComplex ), cudaMemcpyDeviceToDevice );
-				else
-					cudaMemset( (void *) devInverseMuellerMatrix[ (row * 4) + col + 8 ], 0,
-														pImageSize * pImageSize * sizeof( cufftDoubleComplex ) );
-			}
+			for ( int cell = 0; cell < 16; cell++ )
+				if (devInverseMuellerMatrix[ cell ] != NULL)
+					cudaFree( (void *) devInverseMuellerMatrix[ cell ] );
+			free( (void *) devInverseMuellerMatrix );
 		}
-
-	for ( int i = 0; i < stages; i++ )
-	{
-
-		// define the block/thread dimensions.
-		int itemsThisStage = items - (i * MAX_THREADS);
-		if (itemsThisStage > MAX_THREADS)
-			itemsThisStage = MAX_THREADS;
-		int threads = itemsThisStage;
-		int blocks;
-		setThreadBlockSize1D( &threads, &blocks );
-
-		// add the second image to the first for each cell.
-		for ( int col = 0; col < 4; col++ )		
-		{
-			if (devM3[ col + 12 ] != NULL && devInverseMuellerMatrix[ col ] != NULL)
-				devAddArrays<<< blocks, threads >>>(		/* pOne = */ &devInverseMuellerMatrix[ col ][ /* CELL = */ i * MAX_THREADS ],
-										/* pTwo = */ &devM3[ col + 12 ][ /* CELL = */ i * MAX_THREADS ],
-										/* pSize = */ itemsThisStage );
-			if (devM3[ col + 12 ] != NULL && devInverseMuellerMatrix[ col + 4 ] != NULL)
-				devSubtractArrays<<< blocks, threads >>>(	/* pOne = */ &devInverseMuellerMatrix[ col + 4 ][ /* CELL = */ i * MAX_THREADS ],
-										/* pTwo = */ &devM3[ col + 12 ][ /* CELL = */ i * MAX_THREADS ],
-										/* pSize = */ itemsThisStage );
-			if (devM3[ col + 4 ] != NULL && devInverseMuellerMatrix[ col + 8 ] != NULL)
-				devAddArrays<<< blocks, threads >>>(		/* pOne = */ &devInverseMuellerMatrix[ col + 8 ][ /* CELL = */ i * MAX_THREADS ],
-										/* pTwo = */ &devM3[ col + 4 ][ /* CELL = */ i * MAX_THREADS ],
-										/* pSize = */ itemsThisStage );
-			if (devM3[ col + 4 ] != NULL && devInverseMuellerMatrix[ col + 12 ] != NULL)
-				devSubtractArrays<<< blocks, threads >>>(	/* pOne = */ &devInverseMuellerMatrix[ col + 12 ][ /* CELL = */ i * MAX_THREADS ],
-										/* pTwo = */ &devM3[ col + 4 ][ /* CELL = */ i * MAX_THREADS ],
-										/* pSize = */ itemsThisStage );
-		}
-								
-	} // LOOP: i
-
-	// divide the images by 2 to include the factor of 2 we find in Stokes I = (XX + YY) / 2.
-	for ( int cell = 0; cell < 16; cell++ )
-		if (devInverseMuellerMatrix[ cell ] != NULL)
-			devMultiplyImages<<< _gridSize2D, _blockSize2D >>>(	/* pOne = */ devInverseMuellerMatrix[ cell ],
-										/* pScalar = */ 0.5,
-										/* pMask = */ NULL,
-										/* pSizeOne = */ pImageSize );
-
-	// free memory.
-	if (devM3 != NULL)
-	{
-		for ( int cell = 0; cell < 16; cell++ )
-			if (devM3[ cell ] != NULL)
-				cudaFree( (void *) devM3[ cell ] );
-		free( (void *) devM3 );
-	}
-
-	// step 4:	calculate the Mueller matrix by taking the inverse, which we will use for degridding.
-	//
-	//			( I' ) = 1/2 ( XX* + YY* ) = Mu . ( I )
-	//			( Q' )       ( XX* - YY* )        ( Q )
-	//			( U' )       ( YX* + XY* )        ( U )
-	//			( V' )       ( YX* - XY* )        ( V )
-	//
-	cufftDoubleComplex ** devMuellerMatrix = calculateInverseImageMatrix(	/* pdevMatrix = */ devInverseMuellerMatrix,
-											/* pMatrixSize = */ 4,
-											/* pImageSize = */ pImageSize,
-											/* pDivideByDeterminant = */ true );
-
-	// free memory.
-	if (devInverseMuellerMatrix != NULL)
-	{
-		for ( int cell = 0; cell < 16; cell++ )
-			if (devInverseMuellerMatrix[ cell ] != NULL)
-				cudaFree( (void *) devInverseMuellerMatrix[ cell ] );
-		free( (void *) devInverseMuellerMatrix );
-	}
+		
+	} // (BeamStokes == false)
 	
 	// return something.
 	return devMuellerMatrix;
@@ -1311,7 +1346,8 @@ cufftDoubleComplex ** Data::ConvertJonesToMueller
 
 void Data::CopyJonesMatrixIn
 			(
-			cufftComplex ** pFromMatrix
+			cufftComplex ** pFromMatrix,
+			int pBeams
 			)
 {
 
@@ -1321,8 +1357,8 @@ void Data::CopyJonesMatrixIn
 			free( (void *) JonesMatrixIn[ cell ] );
 		if (pFromMatrix[ cell ] != NULL)
 		{
-			JonesMatrixIn[ cell ] = (cufftComplex *) malloc( _param->BeamInSize * _param->BeamInSize * sizeof( cufftComplex ) );
-			memcpy( (void *) JonesMatrixIn[ cell ], (void *) pFromMatrix[ cell ], _param->BeamInSize * _param->BeamInSize * sizeof( cufftComplex ) );
+			JonesMatrixIn[ cell ] = (cufftComplex *) malloc( pBeams * _param->BeamInSize * _param->BeamInSize * sizeof( cufftComplex ) );
+			memcpy( (void *) JonesMatrixIn[ cell ], (void *) pFromMatrix[ cell ], pBeams * _param->BeamInSize * _param->BeamInSize * sizeof( cufftComplex ) );
 		}
 	}
 
@@ -1351,7 +1387,7 @@ void Data::Create
 {
 
 	_taylorTerms = pTaylorTerms;
-	_mosaicID = pMosaicID;
+	MosaicID = pMosaicID;
 	_wProjection = pWProjection;
 	_aProjection = pAProjection;
 	WPlanes = pWPlanes;
@@ -1359,11 +1395,9 @@ void Data::Create
 	_cacheData = pCacheData;
 	_stokes = pStokes;
 	_stokesImages = pStokesImages;
-	
 	NumVisibilities = (long int *) malloc( 1 * sizeof( int ) );
 	Stages = 0;
 	Batches = (int *) malloc( 1 * sizeof( int ) );
-
 	Visibility = (cufftComplex ***) malloc( _stokesImages * sizeof( cufftComplex ** ) );
 	ResidualVisibility = (cufftComplex ***) malloc( _stokesImages * sizeof( cufftComplex **) );
 	for ( int s = 0; s < _stokesImages; s++ )
@@ -1395,7 +1429,7 @@ void Data::Create
 	AverageWeight = (double *) malloc( _stokesImages * sizeof( double ) );
 	for ( int s = 0; s < _stokesImages; s++ )
 		AverageWeight[ s ] = 0.0;
-		
+
 	// Jones matrices
 	JonesMatrixIn = (cufftComplex **) malloc( 4 * sizeof( cufftComplex * ) );
 	for ( int cell = 0; cell < 4; cell++ )
@@ -1429,9 +1463,9 @@ void Data::DeleteCache()
 		// build filename.
 		char filename[ 255 ];
 		if (_param->CacheLocation[0] != '\0')
-			sprintf( filename, "%s%s-%i-%i-cache.dat", _param->CacheLocation, _param->OutputPrefix, _mosaicID, stageID );
+			sprintf( filename, "%s%s-%i-%i-cache.dat", _param->CacheLocation, _param->OutputPrefix, MosaicID, stageID );
 		else
-			sprintf( filename, "%s-%i-%i-cache.dat", _param->OutputPrefix, _mosaicID, stageID );
+			sprintf( filename, "%s-%i-%i-cache.dat", _param->OutputPrefix, MosaicID, stageID );
 
 		// remove file.
 		remove( filename );
@@ -1460,6 +1494,7 @@ void Data::FreeData( int pWhatData )
 					free( (void *) Visibility[ s ][ t ] );
 					Visibility[ s ][ t ] = NULL;
 				}
+
 	if ((pWhatData & DATA_GRID_POSITIONS) == DATA_GRID_POSITIONS && GridPosition != NULL)
 	{
 		free( (void *) GridPosition );
@@ -1645,14 +1680,15 @@ void Data::GenerateAveragePrimaryBeam
 	int averageChannel = 0;
 	int cumulativeChannel = 0;
 	double bestError = 0.0;
-	for ( int spw = 0; spw < pNumSpws; spw++ )
-		for ( int channel = 0; channel < pNumChannels[ spw ]; channel++, cumulativeChannel++ )
-			if (pSpwChannelFlag[ spw ][ channel ] == false)
-				if (abs( pWavelength[ spw ][ channel ] - AverageWavelength ) < bestError || (spw == 0 && channel == 0))
-				{
-					bestError = abs( pWavelength[ spw ][ channel ] - AverageWavelength );
-					averageChannel = cumulativeChannel;
-				}
+	if (LoadedPrimaryBeam == true)
+		for ( int spw = 0; spw < pNumSpws; spw++ )
+			for ( int channel = 0; channel < pNumChannels[ spw ]; channel++, cumulativeChannel++ )
+				if (pSpwChannelFlag[ spw ][ channel ] == false)
+					if (abs( pWavelength[ spw ][ channel ] - AverageWavelength ) < bestError || (spw == 0 && channel == 0))
+					{
+						bestError = abs( pWavelength[ spw ][ channel ] - AverageWavelength );
+						averageChannel = cumulativeChannel;
+					}
 
 	// construct the Jones matrix for the average channel.
 	cufftComplex ** hstMedianJonesIn = (cufftComplex **) malloc( 4 * sizeof( cufftComplex * ) );
@@ -1739,7 +1775,7 @@ void Data::GenerateAveragePrimaryBeam
 			AveragePrimaryBeamIn[ i ] /= maxValue;
 
 	// save a generated primary beam, but only for the first mosaic component.
-	if (_mosaicID == 0)
+	if (MosaicID == 0)
 	{
 		char beamFilename[ 100 ];
 		sprintf( beamFilename, "%s%s", _param->OutputPrefix, Parameters::PRIMARY_BEAM_EXTENSION );
@@ -1769,9 +1805,7 @@ void Data::GenerateAveragePrimaryBeam
 void Data::GenerateMuellerMatrix
 			(
 			int pPBChannel,				// the channel
-			int pImageSize,				// the size of the image held in each matrix cell
-			float * pdevPrimaryBeam,			// the primary beam at the average wavelength.
-			float pPBMaxValue				// the maximum absolute value of the primary beam
+			int pImageSize				// the size of the image held in each matrix cell
 			)
 {
 
@@ -1804,9 +1838,9 @@ void Data::GenerateMuellerMatrix
 //}
 
 	// compute the adjusted inverse-Mueller matrix, which results in a matrix that falls away to zero near the edges.
-	cufftDoubleComplex * devAdjustedInverseMueller = NULL;
-	reserveGPUMemory( (void **) &devAdjustedInverseMueller, pImageSize * pImageSize * sizeof( cufftDoubleComplex ),
-						"reserving device memory for adjusted Mueller", __LINE__ );
+//	cufftDoubleComplex * devAdjustedInverseMueller = NULL;
+//	reserveGPUMemory( (void **) &devAdjustedInverseMueller, pImageSize * pImageSize * sizeof( cufftDoubleComplex ),
+//						"reserving device memory for adjusted Mueller", __LINE__ );
 														
 	// only adjust the diagonal elements of the matrix.
 //	for ( int cell = 0; cell < 16; cell++ )
@@ -1831,9 +1865,9 @@ void Data::GenerateMuellerMatrix
 											
 //		}
 
-	// free the adjusted mueller matrix.
-	if (devAdjustedInverseMueller != NULL)
-		cudaFree( (void *) devAdjustedInverseMueller );
+//	// free the adjusted mueller matrix.
+//	if (devAdjustedInverseMueller != NULL)
+//		cudaFree( (void *) devAdjustedInverseMueller );
 
 	// step 5:	calculate the Mueller matrix by taking the inverse, which we will use for degridding.
 	//
@@ -2113,13 +2147,11 @@ void Data::PerformRobustWeighting( double ** phstTotalWeightPerCell )
 //	Adds a new mosaic component object.
 //
 
-void Data::addMosaicComponent( vector<Data> & pData )
+void Data::addMosaicComponent( vector<Data *> & pData )
 {
 
-	Data newComponent;
-	pData.push_back( newComponent );
-	pData[ pData.size() - 1 ].Create(	/* pTaylorTerms = */ _taylorTerms,
-						/* pMosaicID = */ pData.size() - 1,
+	Data * newComponent = new Data(	/* pTaylorTerms = */ _taylorTerms,
+						/* pMosaicID = */ pData.size(),
 						/* pWProjection = */ _wProjection,
 						/* pAProjection = */ _aProjection,
 						/* pWPlanes = */ WPlanes,
@@ -2127,10 +2159,22 @@ void Data::addMosaicComponent( vector<Data> & pData )
 						/* pCacheData = */ _cacheData,
 						/* pStokes = */ _stokes,
 						/* pStokesImages = */ _stokesImages );
-						
+
+	pData.push_back( newComponent );
+
+//	pData[ pData.size() - 1 ]->Create(	/* pTaylorTerms = */ _taylorTerms,
+//						/* pMosaicID = */ pData.size() - 1,
+//						/* pWProjection = */ _wProjection,
+//						/* pAProjection = */ _aProjection,
+//						/* pWPlanes = */ WPlanes,
+//						/* pPBChannels = */ PBChannels,
+//						/* pCacheData = */ _cacheData,
+//						/* pStokes = */ _stokes,
+//						/* pStokesImages = */ _stokesImages );
+
 	// set up the pointers.
 	if (pData.size() > 1)
-		pData[ pData.size() - 2 ].NextComponent = &pData[ pData.size() - 1 ];
+		pData[ pData.size() - 2 ]->NextComponent = pData[ pData.size() - 1 ];
 
 } // addMosaicComponent
 
@@ -2154,14 +2198,15 @@ void Data::addMosaicComponent( vector<Data> & pData )
 //		YX* = -i(U + V) / 2
 //		YY* = (I - Q) / 2
 //
-//	This maths implies I shouldn't need the factor of 1/2 on the linear polarisations, but for some reason they do need to be there.
+//	This maths implies I shouldn't need the factor of 1/2 on the linear polarisations, but for some reason they do need to be there. Similarly, XX*, XY*, YX*, and YY*
+//	doesn't actually need the factor of 1/2 that is shown above.
 //
 
-double ** Data::getPolarisationMultiplier( char * pMeasurementSetFilename, int * pNumPolarisations, int * pNumPolarisationConfigurations, char * pTableData )
+cufftDoubleComplex ** Data::getPolarisationMultiplier( char * pMeasurementSetFilename, int * pNumPolarisations, int * pNumPolarisationConfigurations, char * pTableData )
 {
 
 	// return value.	
-	double ** hstMultiplier = NULL;
+	cufftDoubleComplex ** hstMultiplier = NULL;
 
 	// get a list of polarisations.
 	int * hstPolarisation = NULL;
@@ -2173,11 +2218,11 @@ double ** Data::getPolarisationMultiplier( char * pMeasurementSetFilename, int *
 	// create a list of multipliers for constructing visibilities from the Stokes parameters.
 	if (*pNumPolarisationConfigurations > 0 && *pNumPolarisations > 0)
 	{
-		hstMultiplier = (double **) malloc( _stokesImages * sizeof( double * ) );
+		hstMultiplier = (cufftDoubleComplex **) malloc( _stokesImages * sizeof( cufftDoubleComplex * ) );
 		for ( int s = 0; s < _stokesImages; s++ )
 		{
-			hstMultiplier[ s ] = (double *) malloc( (*pNumPolarisationConfigurations) * (*pNumPolarisations) * sizeof( double ) );
-			memset( hstMultiplier[ s ], 0, (*pNumPolarisationConfigurations) * (*pNumPolarisations) * sizeof( double ) );
+			hstMultiplier[ s ] = (cufftDoubleComplex *) malloc( (*pNumPolarisationConfigurations) * (*pNumPolarisations) * sizeof( cufftDoubleComplex ) );
+			memset( hstMultiplier[ s ], 0, (*pNumPolarisationConfigurations) * (*pNumPolarisations) * sizeof( cufftDoubleComplex ) );
 		}
 	}
 
@@ -2215,16 +2260,12 @@ double ** Data::getPolarisationMultiplier( char * pMeasurementSetFilename, int *
 			for ( int stokesProduct = 0; stokesProduct < _stokesImages; stokesProduct++ )
 			{
 			
-				double * multiplierPtr = &hstMultiplier[ stokesProduct ][ (config * (*pNumPolarisations)) ];
+				cufftDoubleComplex * multiplierPtr = &hstMultiplier[ stokesProduct ][ (config * (*pNumPolarisations)) ];
 
 				// make sure we've got what we need.
 				int whichStokes = _stokes;
-				bool requestedImage = true;
-				if (_aProjection == true && _param->LeakageCorrection == true)
-				{
+				if (_stokesImages > 1)
 					whichStokes = stokesProduct;
-					requestedImage = (whichStokes == _stokes);
-				}
 			
 				if (whichStokes == STOKES_Q && (stokesQ == false) && (xx == false || yy == false) && (rl == false || lr == false))
 					whichStokes = STOKES_NONE;
@@ -2236,10 +2277,10 @@ double ** Data::getPolarisationMultiplier( char * pMeasurementSetFilename, int *
 					whichStokes = STOKES_NONE;
 
 				// display a warning if we can't do the requested Stokes imaging.
-				if (whichStokes == STOKES_NONE && _stokes != STOKES_NONE && requestedImage == true)
+				if (whichStokes == STOKES_NONE && _stokes != STOKES_NONE && _stokesImages == 1)
 				{
 	
-					printf( "WARNING: Polarisation configuration %i does have the correct polarisation products to image Stokes ", config );
+					printf( "WARNING: Polarisation configuration %i does not have the correct polarisation products to image Stokes ", config );
 					switch (_stokes)
 					{
 						case (STOKES_I):	{ printf( "I" ); break; }
@@ -2255,40 +2296,40 @@ double ** Data::getPolarisationMultiplier( char * pMeasurementSetFilename, int *
 				for ( int i = 0; i < *pNumPolarisations; i++ )
 				{
 					if (polarisationPtr[ i ] == XX_CONST && (whichStokes == STOKES_I || whichStokes == STOKES_Q))
-						multiplierPtr[ i ] = 0.5;
+						multiplierPtr[ i ].x = 0.5;
 					if (polarisationPtr[ i ] == XY_CONST && whichStokes == STOKES_U)
-						multiplierPtr[ i ] = 0.5;
+						multiplierPtr[ i ].y = 0.5;
 					if (polarisationPtr[ i ] == XY_CONST && whichStokes == STOKES_V)
-						multiplierPtr[ i ] = -0.5;
+						multiplierPtr[ i ].y = -0.5;
 					if (polarisationPtr[ i ] == YX_CONST && (whichStokes == STOKES_U || whichStokes == STOKES_V))
-						multiplierPtr[ i ] = 0.5;
+						multiplierPtr[ i ].y = 0.5;
 					if (polarisationPtr[ i ] == YY_CONST && whichStokes == STOKES_I)
-						multiplierPtr[ i ] = 0.5;
+						multiplierPtr[ i ].x = 0.5;
 					if (polarisationPtr[ i ] == YY_CONST && whichStokes == STOKES_Q)
-						multiplierPtr[ i ] = -0.5;
+						multiplierPtr[ i ].x = -0.5;
 					if (polarisationPtr[ i ] == RR_CONST && (whichStokes == STOKES_I || whichStokes == STOKES_V))
-						multiplierPtr[ i ] = 0.5;
+						multiplierPtr[ i ].x = 0.5;
 					if (polarisationPtr[ i ] == LL_CONST && (whichStokes == STOKES_I))
-						multiplierPtr[ i ] = 0.5;
+						multiplierPtr[ i ].x = 0.5;
 					if (polarisationPtr[ i ] == LL_CONST && (whichStokes == STOKES_V))
-						multiplierPtr[ i ] = -0.5;
+						multiplierPtr[ i ].x = -0.5;
 					if (polarisationPtr[ i ] == RL_CONST && (whichStokes == STOKES_Q))
-						multiplierPtr[ i ] = 0.5;
+						multiplierPtr[ i ].x = 0.5;
 					if (polarisationPtr[ i ] == RL_CONST && (whichStokes == STOKES_U))
-						multiplierPtr[ i ] = -0.5;
+						multiplierPtr[ i ].x = -0.5;
 					if (polarisationPtr[ i ] == LR_CONST && (whichStokes == STOKES_Q || whichStokes == STOKES_U))
-						multiplierPtr[ i ] = 0.5;
+						multiplierPtr[ i ].x = 0.5;
 					if (polarisationPtr[ i ] == I_CONST && (whichStokes == STOKES_I))
-						multiplierPtr[ i ] = 1.0;
+						multiplierPtr[ i ].x = 1.0;
 					if (polarisationPtr[ i ] == Q_CONST && (whichStokes == STOKES_Q))
-						multiplierPtr[ i ] = 1.0;
+						multiplierPtr[ i ].x = 1.0;
 					if (polarisationPtr[ i ] == U_CONST && (whichStokes == STOKES_U))
-						multiplierPtr[ i ] = 1.0;
+						multiplierPtr[ i ].x = 1.0;
 					if (polarisationPtr[ i ] == V_CONST && (whichStokes == STOKES_V))
-						multiplierPtr[ i ] = 1.0;
+						multiplierPtr[ i ].x = 1.0;
 				}
 				if (whichStokes == STOKES_NONE)
-					multiplierPtr[ 0 ] = 1.0;
+					multiplierPtr[ 0 ].x = 1.0;
 				
 			} // LOOP: stokesProduct
 
@@ -2320,7 +2361,7 @@ void Data::ProcessMeasurementSet
 			(
 			int pFileIndex,
 			double ** phstTotalWeightPerCell,
-			vector<Data> & pData
+			vector<Data *> & pData
 			)
 {
 
@@ -2349,19 +2390,19 @@ void Data::ProcessMeasurementSet
 
 	// get the polarisation multiplier (and the number of polarisations) which describes how the polarisation products should be handled.
 	int hstNumPolarisations = -1, hstNumPolarisationConfigurations = -1;
-	double ** hstMultiplier = getPolarisationMultiplier(	/* pMeasurementSetFilename = */ _param->MeasurementSetPath[ pFileIndex ],
-								/* pNumPolarisations = */ &hstNumPolarisations,
-								/* pNumPolarisationConfigurations = */ &hstNumPolarisationConfigurations,
-								/* pTableData = */ _param->TableData[ pFileIndex ] );
+	cufftDoubleComplex ** hstMultiplier = getPolarisationMultiplier(	/* pMeasurementSetFilename = */ _param->MeasurementSetPath[ pFileIndex ],
+										/* pNumPolarisations = */ &hstNumPolarisations,
+										/* pNumPolarisationConfigurations = */ &hstNumPolarisationConfigurations,
+										/* pTableData = */ _param->TableData[ pFileIndex ] );
 
 	// upload the polarisation multipliers to the device.
-	double ** devMultiplier = (double **) malloc( _param->NumStokesImages * sizeof( double * ) );
+	cufftDoubleComplex ** devMultiplier = (cufftDoubleComplex **) malloc( _param->NumStokesImages * sizeof( cufftDoubleComplex * ) );
 	if (hstNumPolarisations > 0 && hstNumPolarisationConfigurations > 0)
 		for ( int s = 0; s < _param->NumStokesImages; s++ )
 		{
-			reserveGPUMemory( (void **) &devMultiplier[ s ], hstNumPolarisationConfigurations * hstNumPolarisations * sizeof( double ),
+			reserveGPUMemory( (void **) &devMultiplier[ s ], hstNumPolarisationConfigurations * hstNumPolarisations * sizeof( cufftDoubleComplex ),
 						"declaring device memory for polarisation multipliers", __LINE__ );
-			cudaMemcpy( devMultiplier[ s ], hstMultiplier[ s ], hstNumPolarisationConfigurations * hstNumPolarisations * sizeof( double ),
+			cudaMemcpy( devMultiplier[ s ], hstMultiplier[ s ], hstNumPolarisationConfigurations * hstNumPolarisations * sizeof( cufftDoubleComplex ),
 						cudaMemcpyHostToDevice );
 		}
 
@@ -2512,6 +2553,7 @@ void Data::ProcessMeasurementSet
 																		_param->TableData[ pFileIndex ]),
 									/* pDishDiameter = */ &hstDishDiameter,
 									/* pFlagged = */ &hstAntennaFlag );
+
 	printf( "found %i antennae, ", numberOfAntennae );
 
 	// count the number of unflagged antennae.
@@ -2584,7 +2626,7 @@ void Data::ProcessMeasurementSet
 	printf( "num visibilities %li\n", numVisibilities );
 	printf( "num samples %i\n", hstNumSamples );
 	printf( "num polarisations %i\n", hstNumPolarisations );
-	printf( "minimum dish diameter %4.2f m\n", minimumDishDiameter );
+	printf( "minimum dish diameter %4.2f m\n\n", minimumDishDiameter );
 
 	// flag any spws that are not actually used in our data.
 	for ( int spw = 0; spw < numSpws; spw++ )
@@ -2644,7 +2686,7 @@ void Data::ProcessMeasurementSet
 	double * hstMaxWavelength = (double *) malloc( hstNumFields * sizeof( double ) );
 	for ( int i = 0; i < hstNumFields; i++ )
 	{
-		pData[ firstMosaicComponent + i ].AverageWavelength = 0.0;
+		pData[ firstMosaicComponent + i ]->AverageWavelength = 0.0;
 		hstValidChannels[ i ] = 0;
 		hstMinWavelength[ i ] = -1.0;
 		hstMaxWavelength[ i ] = -1.0;
@@ -2653,7 +2695,7 @@ void Data::ProcessMeasurementSet
 	{
 		int spw = hstDataDescSpw[ hstDataDescID[ sample ] ];
 		int fieldID = hstSampleFieldID[ sample ];
-		pData[ firstMosaicComponent + fieldID ].AverageWavelength += hstTmpTotal[ spw ];
+		pData[ firstMosaicComponent + fieldID ]->AverageWavelength += hstTmpTotal[ spw ];
 		hstSamplesPerSpw[ spw ]++;
 		if (hstTmpMin[ spw ] < hstMinWavelength[ fieldID ] || hstMinWavelength[ fieldID ] < 0.0)
 			hstMinWavelength[ fieldID ] = hstTmpMin[ spw ];
@@ -2664,10 +2706,10 @@ void Data::ProcessMeasurementSet
 
 	// calculate the average wavelength for each field by dividing by the number of channels, and converting from a frequency to a wavelength.
 	for ( int field = 0; field < hstNumFields; field++ )
-		if (pData[ firstMosaicComponent + field ].AverageWavelength > 0)
-			pData[ firstMosaicComponent + field ].AverageWavelength = CONST_C * (double) hstValidChannels[ field ] / pData[ firstMosaicComponent + field ].AverageWavelength;
+		if (pData[ firstMosaicComponent + field ]->AverageWavelength > 0)
+			pData[ firstMosaicComponent + field ]->AverageWavelength = CONST_C * (double) hstValidChannels[ field ] / pData[ firstMosaicComponent + field ]->AverageWavelength;
 		else
-			pData[ firstMosaicComponent + field ].AverageWavelength = 1.0;
+			pData[ firstMosaicComponent + field ]->AverageWavelength = 1.0;
 
 	// free data.
 	if (hstTmpTotal != NULL)
@@ -2685,21 +2727,31 @@ void Data::ProcessMeasurementSet
 
 	// calculate primary-beam channels for this measurement set.
 	int ** hstWhichPBChannel = NULL;
-	double * hstPBChannelWavelength = NULL;
-	hstPBChannelWavelength = (double *) malloc( PBChannels * sizeof( double ) );
+	PBChannelWavelength = (double *) malloc( PBChannels * sizeof( double ) );
 	calculatePBChannels(	/* OUT: phstWhichPBChannel = */ &hstWhichPBChannel,
-				/* OUT: phstPBChannelWavelength = */ hstPBChannelWavelength,
 				/* IN: phstWavelength = */ hstWavelength,
 				/* IN: pNumSpws = */ numSpws,
 				/* IN: phstNumChannels = */ hstNumChannels,
 				/* IN: phstSpwChannelFlag = */ hstSpwChannelFlag );
+				
+	// copy channel wavelengths to the other fields.
+	if (hstNumFields > 1)
+		for ( int field = 1; field < hstNumFields; field++ )
+		{
+			pData[ firstMosaicComponent + field ]->PBChannelWavelength = (double *) malloc( PBChannels * sizeof( double ) );
+			memcpy( pData[ firstMosaicComponent + field ]->PBChannelWavelength, PBChannelWavelength, PBChannels * sizeof( double ) );
+		}
 
+	printf( "average wavelength(s) for field(s) is/are " );
 	for ( int field = 0; field < hstNumFields; field++ )
-		printf( "average wavelength for field %i is %6.4f mm (min: %6.4f mm, max %6.4f mm)\n", fieldIDMap[ field ],
-				pData[ firstMosaicComponent + field ].AverageWavelength * 1000.0, hstMinWavelength[ field ] * 1000.0,
-				hstMaxWavelength[ field ] * 1000.0 );
-	printf( "        largest wavelength in MS is %6.4f mm\n\n", maximumWavelength * 1000.0 );
+	{
+		printf( "%i: %6.4f mm", fieldIDMap[ field ], pData[ firstMosaicComponent + field ]->AverageWavelength * 1000.0 );
+		if (field < hstNumFields - 1)
+			printf( ", " );
+	}			
+	printf( "\nlargest wavelength in MS is %6.4f mm\n\n", maximumWavelength * 1000.0 );
 	
+	// set the flag for a loaded or generated primary beam.
 	bool loadedPrimaryBeam = (_param->BeamPattern[ pFileIndex ][0] != '\0');
 
 	// if a beam filename was provided in the settings file then we load the beam here.
@@ -2751,48 +2803,56 @@ void Data::ProcessMeasurementSet
 				}
 
 			// generate primary beams.
-			generatePrimaryBeamAiry(	/* phstJonesMatrix = */ JonesMatrixIn,
-							/* pWidth = */ _param->AiryDiskDiameter,
-							/* pCutout = */ _param->AiryDiskBlockage,
-							/* pNumSpws = */ numSpws,
-							/* phstNumChannels = */ hstNumChannels,
-							/* phstWavelength = */ hstWavelength );
+			generatePrimaryBeamAiry(	/* pWidth = */ _param->AiryDiskDiameter,
+							/* pCutout = */ _param->AiryDiskBlockage );
+//							/* pNumSpws = */ numSpws,
+//							/* phstNumChannels = */ hstNumChannels,
+//							/* phstWavelength = */ hstWavelength );
 							
 		}
 		else
-			generatePrimaryBeamGaussian(	/* phstJonesMatrix = */ JonesMatrixIn,
-							/* pWidth = */ minimumDishDiameter,
-							/* pNumSpws = */ numSpws,
-							/* phstNumChannels = */ hstNumChannels,
-							/* phstWavelength = */ hstWavelength );
+			generatePrimaryBeamGaussian(	/* pWidth = */ minimumDishDiameter );
+//							/* pNumSpws = */ numSpws,
+//							/* phstNumChannels = */ hstNumChannels,
+//							/* phstWavelength = */ hstWavelength );
 
 	}
-	
+
+	// count the total number of channels.
+	int totalChannels = 0;
+	for ( int spw = 0; spw < numSpws; spw++ )
+		totalChannels += hstNumChannels[ spw ];
+
 	for ( int field = hstNumFields - 1; field >= 0; field-- )
 	{
 	
+		// set the flag for a loaded/generated primary beam.
+		pData[ firstMosaicComponent + field ]->LoadedPrimaryBeam = loadedPrimaryBeam;
+
 		// if this is not the first field then copy the Jones matrices
 		if (field > 0)
-			pData[ firstMosaicComponent + field ].CopyJonesMatrixIn( /* pFromMatrix = */ JonesMatrixIn );
+			pData[ firstMosaicComponent + field ]->CopyJonesMatrixIn(	/* pFromMatrix = */ JonesMatrixIn,
+											/* pBeams = */ (loadedPrimaryBeam == true ? totalChannels : 1) );
 
 		// generate the average primary beam for each field.
-		pData[ firstMosaicComponent + field ].GenerateAveragePrimaryBeam(	/* pNumSpws = */ numSpws,
+		pData[ firstMosaicComponent + field ]->GenerateAveragePrimaryBeam(	/* pNumSpws = */ numSpws,
 											/* pNumChannels = */ hstNumChannels,
 											/* pSpwChannelFlag = */ hstSpwChannelFlag,
 											/* pWavelength = */ hstWavelength );
 
 		// reduce the number of channels if required by selecting the beam pattern from the centre of each channel range.
-		pData[ firstMosaicComponent + field ].ReduceJonesMatrixChannels(	/* pNumSpws = */ numSpws,
-											/* pNumChannels = */ hstNumChannels,
-											/* pSpwChannelFlag = */ hstSpwChannelFlag,
-											/* pWhichPBChannel = */ hstWhichPBChannel );
-											
+		if (loadedPrimaryBeam == true)
+			pData[ firstMosaicComponent + field ]->ReduceJonesMatrixChannels(	/* pNumSpws = */ numSpws,
+												/* pNumChannels = */ hstNumChannels,
+												/* pSpwChannelFlag = */ hstSpwChannelFlag,
+												/* pWhichPBChannel = */ hstWhichPBChannel );
+
 	}
-		
+
 	// update the maximum wavelength.
 	for ( int field = 0; field < hstNumFields; field++ )
-		pData[ firstMosaicComponent + field ].MaximumWavelength = maximumWavelength;
-		
+		pData[ firstMosaicComponent + field ]->MaximumWavelength = maximumWavelength;
+
 	//
 	//
 	// NOTE: hstBeamWidth should be calculated as the 20% width of a Gaussian beam for the maximum dish diameter and the average wavelength for each field.
@@ -2802,7 +2862,7 @@ void Data::ProcessMeasurementSet
 	// if we are image-plane mosaicing then we need to measure the radius of the beam at the 1% level [in pixels].
 	double hstBeamWidth = 0.0;
 	if (_param->ImagePlaneMosaic == true)
-		hstBeamWidth = getPrimaryBeamWidth(	/* phstBeam = */ pData[ firstMosaicComponent ].AveragePrimaryBeamIn,
+		hstBeamWidth = getPrimaryBeamWidth(	/* phstBeam = */ pData[ firstMosaicComponent ]->AveragePrimaryBeamIn,
 							/* pBeamSize = */ _param->BeamInSize );
 
 	// free data.
@@ -2856,7 +2916,7 @@ void Data::ProcessMeasurementSet
 
 	// calculate w-planes for all mosaic fields.
 	for ( int field = 0; field < hstNumFields; field++ )
-		pData[ firstMosaicComponent + field ].calculateWPlanes(	/* pFieldID = */ field,
+		pData[ firstMosaicComponent + field ]->calculateWPlanes(	/* pFieldID = */ field,
 										/* pCasaFieldID = */ fieldIDMap[ field ],
 										/* pNumSamples = */ hstNumSamples,
 										/* phstSample = */ hstSample,
@@ -2875,8 +2935,8 @@ void Data::ProcessMeasurementSet
 	if (_param->ImagePlaneMosaic == true)
 		for ( int field = 0; field < hstNumFields; field++ )
 		{
-			pData[ firstMosaicComponent + field ].ImagePlaneRA = hstFieldPhaseTo[ (field * 2) + 0 ];
-			pData[ firstMosaicComponent + field ].ImagePlaneDEC = hstFieldPhaseTo[ (field * 2) + 1 ];
+			pData[ firstMosaicComponent + field ]->ImagePlaneRA = hstFieldPhaseTo[ (field * 2) + 0 ];
+			pData[ firstMosaicComponent + field ]->ImagePlaneDEC = hstFieldPhaseTo[ (field * 2) + 1 ];
 		}
 
 	// ----------------------------------------------------
@@ -2916,6 +2976,7 @@ void Data::ProcessMeasurementSet
 	// set a flag which determines if we need to cache and uncache our data. if we have only one stage (and no multiple measurement sets) then we don't
 	// need caching.
 	_param->CacheData = _param->CacheData || (baselinesPerStage < numberOfBaselines);
+
 	if (_param->CacheData == true)
 		printf( "the data will be loaded in %i batch(es), and cached to disk\n\n", (int) ceil( (double) numberOfBaselines / (double) baselinesPerStage) );
 	else
@@ -2971,11 +3032,11 @@ void Data::ProcessMeasurementSet
 		// resize the array holding the number of batch records.
 		for ( int mosaicID = firstMosaicComponent; mosaicID < firstMosaicComponent + hstNumFields; mosaicID++ )
 		{
-			pData[ mosaicID ].Stages = stageID + 1;
-			pData[ mosaicID ].NumVisibilities = (long int *) realloc( pData[ mosaicID ].NumVisibilities,
-											pData[ mosaicID ].Stages * sizeof( long int ) );
-			pData[ mosaicID ].Batches = (int *) realloc( pData[ mosaicID ].Batches,
-											pData[ mosaicID ].Stages * sizeof( int ) );
+			pData[ mosaicID ]->Stages = stageID + 1;
+			pData[ mosaicID ]->NumVisibilities = (long int *) realloc( pData[ mosaicID ]->NumVisibilities,
+											pData[ mosaicID ]->Stages * sizeof( long int ) );
+			pData[ mosaicID ]->Batches = (int *) realloc( pData[ mosaicID ]->Batches,
+											pData[ mosaicID ]->Stages * sizeof( int ) );
 		}
 
 		// ----------------------------------------------------
@@ -3039,7 +3100,7 @@ void Data::ProcessMeasurementSet
 			{
 				double weight = 0.0;
 				for ( int polarisation = 0; polarisation < hstNumPolarisations; polarisation++ )
-					weight += abs( hstMultiplier[ stokes ][ (hstPolarisationConfig[ sample ] * hstNumPolarisations) + polarisation ] ) *
+					weight += cuCabs( hstMultiplier[ stokes ][ (hstPolarisationConfig[ sample ] * hstNumPolarisations) + polarisation ] ) *
 									tmpWeight[ (sample * hstNumPolarisations) + polarisation ];
 				hstSampleWeight[ stokes ][ sample ] = weight;
 			}
@@ -3206,13 +3267,13 @@ void Data::ProcessMeasurementSet
 
 		// sum the weights and gridded visibilities for each mosaic component.
 		for ( int mosaicID = firstMosaicComponent; mosaicID < firstMosaicComponent + hstNumFields; mosaicID++ )
-			pData[ mosaicID ].SumWeights(	/* phstTotalWeightPerCell = */ phstTotalWeightPerCell,
-							/* pStageID = */ stageID );
+			pData[ mosaicID ]->SumWeights(	/* phstTotalWeightPerCell = */ phstTotalWeightPerCell,
+								/* pStageID = */ stageID );
 
 		// save the visibility, grid position, kernel index, density map and weight.
 		if (_param->CacheData == true)
 			for ( int mosaicID = firstMosaicComponent; mosaicID < firstMosaicComponent + hstNumFields; mosaicID++ )
-				pData[ mosaicID ].CacheData(	/* pBatchID = */ stageID,
+				pData[ mosaicID ]->CacheData(	/* pBatchID = */ stageID,
 								/* pTaylorTerm = */ -1,
 								/* pWhatData = */ DATA_VISIBILITIES | DATA_GRID_POSITIONS | DATA_KERNEL_INDEXES | DATA_DENSITIES |
 											DATA_WEIGHTS | DATA_MFS_WEIGHTS );
@@ -3263,13 +3324,13 @@ void Data::ProcessMeasurementSet
 
 	// see if we can merge files together.
 	for ( int mosaicComponent = firstMosaicComponent; mosaicComponent < firstMosaicComponent + hstNumFields; mosaicComponent++ )
-		pData[ mosaicComponent ].ShrinkCache(	/* pMaxMemory = */ hstMaxMemory );
+		pData[ mosaicComponent ]->ShrinkCache(	/* pMaxMemory = */ hstMaxMemory );
 
 	// see if we can turn off disk caching.
 //	for ( int mosaicComponent = firstMosaicComponent; mosaicComponent < firstMosaicComponent + hstNumFields; mosaicComponent++ )
-//		if (_param->CacheData == true && _param->MeasurementSets == 1 && pData[ mosaicComponent ].Stages == 1)
+//		if (_param->CacheData == true && _param->MeasurementSets == 1 && pData[ mosaicComponent ]->Stages == 1)
 //		{
-//			pData[ mosaicComponent ].UncacheData(	/* pBatchID = */ 0,
+//			pData[ mosaicComponent ]->UncacheData(	/* pBatchID = */ 0,
 //								/* pTaylorTerm = */ -1,
 //								/* pOffset = */ 0,
 //								/* pWhatData = */ DATA_ALL );
@@ -3282,38 +3343,39 @@ void Data::ProcessMeasurementSet
 
 		// for uniform weighting update the weight using the density map.
 		if (_param->Weighting == UNIFORM && _param->UvPlaneMosaic == false)
-			pData[ firstMosaicComponent + field ].PerformUniformWeighting( /* phstTotalWeightPerCell = */ phstTotalWeightPerCell );
+			pData[ firstMosaicComponent + field ]->PerformUniformWeighting( /* phstTotalWeightPerCell = */ phstTotalWeightPerCell );
 
 		// for robust weighting we need to calculate the average cell weighting, and then the parameter f^2.
 		if (_param->Weighting == ROBUST && _param->UvPlaneMosaic == false)
-			pData[ firstMosaicComponent + field ].PerformRobustWeighting( /* phstTotalWeightPerCell = */ phstTotalWeightPerCell );
+			pData[ firstMosaicComponent + field ]->PerformRobustWeighting( /* phstTotalWeightPerCell = */ phstTotalWeightPerCell );
 
 		// for natural weighting, we have already summed the weight and now need to calculate the average weight.
 		if (_param->Weighting == NATURAL)
 			for ( int s = 0; s < _param->NumStokesImages; s++ )
-				pData[ firstMosaicComponent + field ].AverageWeight[ s ] /= (double) pData[ firstMosaicComponent + field ].GriddedVisibilities;
+				pData[ firstMosaicComponent + field ]->AverageWeight[ s ] /= (double) pData[ firstMosaicComponent + field ]->GriddedVisibilities;
 
 		// store the data phase position and the imaging phase position.
-		pData[ firstMosaicComponent + field ].PhaseFromRA = hstFieldPhaseFrom[ field * 2 ];
-		pData[ firstMosaicComponent + field ].PhaseFromDEC = hstFieldPhaseFrom[ (field * 2) + 1 ];
-		pData[ firstMosaicComponent + field ].PhaseToRA = hstFieldPhaseTo[ field * 2 ];
-		pData[ firstMosaicComponent + field ].PhaseToDEC = hstFieldPhaseTo[ (field * 2) + 1 ];
+		pData[ firstMosaicComponent + field ]->PhaseFromRA = hstFieldPhaseFrom[ field * 2 ];
+		pData[ firstMosaicComponent + field ]->PhaseFromDEC = hstFieldPhaseFrom[ (field * 2) + 1 ];
+		pData[ firstMosaicComponent + field ]->PhaseToRA = hstFieldPhaseTo[ field * 2 ];
+		pData[ firstMosaicComponent + field ]->PhaseToDEC = hstFieldPhaseTo[ (field * 2) + 1 ];
 
 		// reproject the primary beam into the output phase position. for imaging mosaics we also need to reproject the beam to the mosaic component phase
 		// position, and for A-projection we need to reproject the beam for each A-plane.
-		pData[ firstMosaicComponent + field ].reprojectPrimaryBeams(	/* pBeamOutSize = */ _param->BeamSize,
-										/* pBeamOutCellSize = */ _param->CellSize,
-										/* pOutputRA = */ _param->OutputRA,
-										/* pOutputDEC = */ _param->OutputDEC,
-										/* pImagePlaneMosaic = */ _param->ImagePlaneMosaic,
-										/* pMaxWavelength = */ maximumWavelength );
+		pData[ firstMosaicComponent + field ]->reprojectPrimaryBeams(	/* pBeamOutSize = */ _param->BeamSize,
+											/* pBeamOutCellSize = */ _param->CellSize,
+											/* pOutputRA = */ _param->OutputRA,
+											/* pOutputDEC = */ _param->OutputDEC,
+											/* pImagePlaneMosaic = */ _param->ImagePlaneMosaic,
+											/* pMaxWavelength = */ maximumWavelength );
 
 		// reproject the determinant of the Mueller matrix as well. this is needed for correcting the dirty images.			
-		pData[ firstMosaicComponent + field ].ReprojectMuellerDeterminant(	/* pBeamOutSize = */ _param->BeamSize,
+		pData[ firstMosaicComponent + field ]->ReprojectMuellerDeterminant(	/* pBeamOutSize = */ _param->BeamSize,
 											/* pBeamOutCellSize = */ _param->CellSize,
 											/* pToRA = */ _param->OutputRA,
 											/* pToDEC = */ _param->OutputDEC );
 
+if (field == 0)
 {
 	char filename[ 100 ];
 	sprintf( filename, "mueller-determinant" );
@@ -3331,20 +3393,20 @@ void Data::ProcessMeasurementSet
 }
 
 		// work out how many GPU batches we'll need to process the visibilities for each stage.
-		for ( int stageID = 0; stageID < pData[ firstMosaicComponent + field ].Stages; stageID++ )
+		for ( int stageID = 0; stageID < pData[ firstMosaicComponent + field ]->Stages; stageID++ )
 		{
 		
 			// the number of visibilities in this stage cannot exceed the preferred visibility batch size.
-			long int batchSize = pData[ firstMosaicComponent + field ].NumVisibilities[ stageID ];
+			long int batchSize = pData[ firstMosaicComponent + field ]->NumVisibilities[ stageID ];
 			if (batchSize > _param->PREFERRED_VISIBILITY_BATCH_SIZE)
 				batchSize = _param->PREFERRED_VISIBILITY_BATCH_SIZE;
 				
 			// create an array for the number of batches per stage.
-			pData[ firstMosaicComponent + field ].Batches = (int *) malloc( pData[ firstMosaicComponent + field ].Stages * sizeof( int ) );
+			pData[ firstMosaicComponent + field ]->Batches = (int *) malloc( pData[ firstMosaicComponent + field ]->Stages * sizeof( int ) );
 				
 			// work out the number of batches.
-			pData[ firstMosaicComponent + field ].Batches[ stageID ] =
-						(int) ceil( (double) pData[ firstMosaicComponent + field ].NumVisibilities[ stageID ] /
+			pData[ firstMosaicComponent + field ]->Batches[ stageID ] =
+						(int) ceil( (double) pData[ firstMosaicComponent + field ]->NumVisibilities[ stageID ] /
 								(double) (batchSize * _param->NumGPUs) );
 			
 		}
@@ -3370,8 +3432,6 @@ void Data::ProcessMeasurementSet
 		free( (void *) hstNumChannels );
 	if (hstUnflaggedChannels != NULL)
 		free( (void *) hstUnflaggedChannels );
-	if (hstPBChannelWavelength != NULL)
-		free( (void *) hstPBChannelWavelength );
 	if (_muellerDeterminantIn != NULL)
 	{
 		free( (void *) _muellerDeterminantIn );
@@ -3437,7 +3497,7 @@ printf( "%d: %i channels for A-plane %i\n", __LINE__, hstInputChannelsPerPBChann
 					}
 }
 
-				// reduce the size of the Jones matrix cell, and copy the temporary Jones matrix into the actual one.
+			// reduce the size of the Jones matrix cell, and copy the temporary Jones matrix into the actual one.
 			JonesMatrixIn[ cell ] = (cufftComplex *) realloc( JonesMatrixIn[ cell ],
 												PBChannels * _param->BeamInSize * _param->BeamInSize * sizeof( cufftComplex ) );
 			memcpy( JonesMatrixIn[ cell ], tmpJonesMatrix, PBChannels * _param->BeamInSize * _param->BeamInSize * sizeof( cufftComplex ) );
@@ -3498,21 +3558,38 @@ void Data::ReprojectJonesMatrix( int pPBChannel, int pBeamOutSize, double pBeamO
 	
 			// create space for the images, and reproject the X, XY, YX, and Y components of the primary beam.
 			JonesMatrix[ cell ] = (cufftComplex *) malloc( pBeamOutSize * pBeamOutSize * sizeof( cufftComplex ) );
-			reprojectImage(	/* phstImageIn = */ &JonesMatrixIn[ cell ][ pPBChannel * _param->BeamInSize * _param->BeamInSize ],
-						/* phstImageOut = */ JonesMatrix[ cell ],
-						/* pImageInSize = */ _param->BeamInSize,
-						/* pImageOutSize = */ pBeamOutSize,
-						/* pInputCellSize = */ _param->BeamInCellSize,
-						/* pOutputCellSize = */ pBeamOutCellSize * (double) _param->ImageSize / (double) pBeamOutSize,
-						/* pInRA = */ PhaseFromRA,
-						/* pInDec = */ PhaseFromDEC,
-						/* pOutRA = */ PhaseToRA,
-						/* pOutDec = */ PhaseToDEC,
-						/* pdevInImage = */ devInBeam,
-						/* pdevOutImage = */ devOutBeam,
-						/* pImagePlaneReprojection = */ imagePlaneReprojection,
-						/* pSquareBeam = */ false,
-						/* pVerbose = */ false );
+			if (LoadedPrimaryBeam == true)
+				reprojectImage(	/* phstImageIn = */ &JonesMatrixIn[ cell ][ pPBChannel * _param->BeamInSize * _param->BeamInSize ],
+							/* phstImageOut = */ JonesMatrix[ cell ],
+							/* pImageInSize = */ _param->BeamInSize,
+							/* pImageOutSize = */ pBeamOutSize,
+							/* pInputCellSize = */ _param->BeamInCellSize,
+							/* pOutputCellSize = */ pBeamOutCellSize * (double) _param->ImageSize / (double) pBeamOutSize,
+							/* pInRA = */ PhaseFromRA,
+							/* pInDec = */ PhaseFromDEC,
+							/* pOutRA = */ PhaseToRA,
+							/* pOutDec = */ PhaseToDEC,
+							/* pdevInImage = */ devInBeam,
+							/* pdevOutImage = */ devOutBeam,
+							/* pImagePlaneReprojection = */ imagePlaneReprojection,
+							/* pSquareBeam = */ false,
+							/* pVerbose = */ false );
+			else
+				reprojectImage(	/* phstImageIn = */ JonesMatrixIn[ cell ],
+							/* phstImageOut = */ JonesMatrix[ cell ],
+							/* pImageInSize = */ _param->BeamInSize,
+							/* pImageOutSize = */ pBeamOutSize,
+							/* pInputCellSize = */ _param->BeamInCellSize * PBChannelWavelength[ pPBChannel ] / AverageWavelength,
+							/* pOutputCellSize = */ pBeamOutCellSize * (double) _param->ImageSize / (double) pBeamOutSize,
+							/* pInRA = */ PhaseFromRA,
+							/* pInDec = */ PhaseFromDEC,
+							/* pOutRA = */ PhaseToRA,
+							/* pOutDec = */ PhaseToDEC,
+							/* pdevInImage = */ devInBeam,
+							/* pdevOutImage = */ devOutBeam,
+							/* pImagePlaneReprojection = */ imagePlaneReprojection,
+							/* pSquareBeam = */ false,
+							/* pVerbose = */ false );
 						
 		}
 	}
@@ -3633,7 +3710,7 @@ void Data::ReprojectMuellerDeterminant
 					/* pdevInImage = */ devInBeam,
 					/* pdevOutImage = */ devOutBeam,
 					/* pImagePlaneReprojection = */ imagePlaneReprojection,
-					/* pVerbose = */ true );
+					/* pVerbose = */ false );
 
 		// free memory.
 		if (devInBeam != NULL)
@@ -3659,7 +3736,8 @@ float * Data::ReprojectPrimaryBeam
 			double pBeamOutCellSize,			// the cell size of the image in arcseconds
 			double pToRA,					// mosaic/image output RA phase position
 			double pToDEC,					// mosaic/image output DEC phase position
-			double pToWavelength				// the wavelength we require the beam to have
+			double pToWavelength,				// the wavelength we require the beam to have
+			bool pVerbose
 			)
 {
 
@@ -3669,8 +3747,10 @@ float * Data::ReprojectPrimaryBeam
 	// create two workspace primary beams on the device.
 	float * devInBeam = NULL;
 	float * devOutBeam = NULL;
-	reserveGPUMemory( (void **) &devInBeam, _param->BeamInSize * _param->BeamInSize * sizeof( cufftComplex ), "reserving memory for the input primary beam on the device", __LINE__ );
-	reserveGPUMemory( (void **) &devOutBeam, pBeamOutSize * pBeamOutSize * sizeof( cufftComplex ), "reserving memory for the output primary beam on the device", __LINE__ );
+	reserveGPUMemory( (void **) &devInBeam, _param->BeamInSize * _param->BeamInSize * sizeof( cufftComplex ),
+									"reserving memory for the input primary beam on the device", __LINE__ );
+	reserveGPUMemory( (void **) &devOutBeam, pBeamOutSize * pBeamOutSize * sizeof( cufftComplex ),
+									"reserving memory for the output primary beam on the device", __LINE__ );
 
 	// create the device memory needed by the reprojection code.
 	Reprojection::rpVectI outSize = { /* x = */ pBeamOutSize, /* y = */ pBeamOutSize };
@@ -3693,7 +3773,7 @@ float * Data::ReprojectPrimaryBeam
 				/* pdevInImage = */ devInBeam,
 				/* pdevOutImage = */ devOutBeam,
 				/* pImagePlaneReprojection = */ imagePlaneReprojection,
-				/* pVerbose = */ true );
+				/* pVerbose = */ pVerbose );
 
 	// free memory.
 	if (devInBeam != NULL)
@@ -3892,9 +3972,9 @@ void Data::UncacheData( int pStageID, int pTaylorTerm, long int pOffset, int pWh
 
 	// build the full filename.
 	if (_param->CacheLocation[0] != '\0')
-		sprintf( filename, "%s%s-%i-%i-cache.dat", _param->CacheLocation, _param->OutputPrefix, _mosaicID, pStageID );
+		sprintf( filename, "%s%s-%i-%i-cache.dat", _param->CacheLocation, _param->OutputPrefix, MosaicID, pStageID );
 	else
-		sprintf( filename, "%s-%i-%i-cache.dat", _param->OutputPrefix, _mosaicID, pStageID );
+		sprintf( filename, "%s-%i-%i-cache.dat", _param->OutputPrefix, MosaicID, pStageID );
 
 	// open the file for reading.
 	FILE * fr = fopen( filename, "rb" );
@@ -4640,8 +4720,7 @@ void Data::calculateGridPositions
 
 void Data::calculatePBChannels
 			(
-			int *** phstWhichPBChannel,			// maps spw and channel to the PB channel
-			double * phstPBChannelWavelength,		// holds the wavelength of each PB channel
+			int *** phstWhichPBChannel,	
 			double ** phstWavelength,			// holds the wavelength of each spw/channel
 			int pNumSpws,
 			int * phstNumChannels,
@@ -4688,7 +4767,7 @@ void Data::calculatePBChannels
 
 	// calculate the wavelengths.
 	for ( int i = 0; i < _param->PBChannels; i++ )
-		phstPBChannelWavelength[ i ] = hstWavelength[ ((2 * i) + 1) * numWavelengths / (2 * _param->PBChannels) ];
+		PBChannelWavelength[ i ] = hstWavelength[ ((2 * i) + 1) * numWavelengths / (2 * _param->PBChannels) ];
 
 	// free data.
 	if (hstWavelength != NULL)
@@ -4708,10 +4787,10 @@ void Data::calculatePBChannels
 			// find the closest A-plane.
 			double bestError = 0.0;
 			for ( int pbChannel = 0; pbChannel < _param->PBChannels; pbChannel++ )
-				if (abs( phstWavelength[ spw ][ channel ] - phstPBChannelWavelength[ pbChannel ] ) < bestError || pbChannel == 0)
+				if (abs( phstWavelength[ spw ][ channel ] - PBChannelWavelength[ pbChannel ] ) < bestError || pbChannel == 0)
 				{
 					hstWhichPBChannel[ spw ][ channel ] = pbChannel;
-					bestError = abs( phstWavelength[ spw ][ channel ] - phstPBChannelWavelength[ pbChannel ] );
+					bestError = abs( phstWavelength[ spw ][ channel ] - PBChannelWavelength[ pbChannel ] );
 				}
 
 		} // LOOP: channel
@@ -4737,7 +4816,7 @@ void Data::calculateVisibilityAndFlag
 			int * phstPolarisationConfig,			//
 			cufftComplex * phstVisibilityIn,		//
 			bool * phstFlagIn,				//
-			double ** pdevMultiplier			//
+			cufftDoubleComplex ** pdevMultiplier		//
 			)
 {
 
@@ -5481,37 +5560,27 @@ void Data::doPhaseCorrectionSamples( PhaseCorrection * pPhaseCorrection, int pNu
 
 void Data::generatePrimaryBeamAiry
 	(
-	cufftComplex ** phstJonesMatrix,		// the primary beam array in which to place the generated beams. this is the full Jones matrix, and we
-							//		only generate images in cells 0, and 3. cells 1 and 2 remain empty.
 	double pWidth,					// the width of the dish
-	double pCutout,				// the cutout representing the focus box
-	int pNumSpws,					// the number of spws
-	int * phstNumChannels,				// the number of channels per spw
-	double ** phstWavelength			// the wavelength
+	double pCutout					// the cutout representing the focus box
 	)
 {
 
 	const double PIXELS_PER_METRE = 8.0;
 
 	printf( "generating primary beam using an Airy disk from a uniformly illuminated %4.2f m aperture dish with a %4.2f m blockage.....\n\n", pWidth, pCutout );
-	
-	// count the number of channels.
-	int totalChannels = 0;
-	for ( int spw = 0; spw < pNumSpws; spw++ )
-		totalChannels += phstNumChannels[ spw ];
 
 	// simulate an airy disk primary beam. we use 6x the required beam size to generate the beam, but then chop it down by a factor of 6 later.
-	int workspaceSupport = Parameters::BEAM_SIZE * 3;
-	int workspaceSize = (workspaceSupport * 2); // in pixels
+	int workspaceSize = Parameters::BEAM_SIZE * 6; // in pixels
+	int workspaceSupport = workspaceSize / 2;
 	
-	// the workspace size is 6x larger than our beam size, so we set the beam size here.
-	_param->BeamInSize = workspaceSize / 6;
+	// set the beam size.
+	_param->BeamInSize = Parameters::BEAM_SIZE;
 
 	// create primary beams on the host. we only set the diagonal array elements because these give us all the non-leakage beam patterns for I, Q, U and V.
 	for ( int i = 0; i < 4; i += 3 )
 	{
-		phstJonesMatrix[ /* CELL = */ i ] = (cufftComplex *) malloc( totalChannels * _param->BeamInSize * _param->BeamInSize * sizeof( cufftComplex ) );
-		memset( (void *) phstJonesMatrix[ /* CELL = */ i ], 0, totalChannels * _param->BeamInSize * _param->BeamInSize * sizeof( cufftComplex ) );
+		JonesMatrixIn[ /* CELL = */ i ] = (cufftComplex *) malloc( _param->BeamInSize * _param->BeamInSize * sizeof( cufftComplex ) );
+		memset( (void *) JonesMatrixIn[ /* CELL = */ i ], 0, _param->BeamInSize * _param->BeamInSize * sizeof( cufftComplex ) );
 	}
 
 	// create beam on device.
@@ -5524,95 +5593,86 @@ void Data::generatePrimaryBeamAiry
 
 	// calculate the image-plane pixel size of the primary beam, based upon spw 0, channel 0.
 	double uvPixelSize = 1.0 / PIXELS_PER_METRE; 								// in metres
-	double uvPixelSizeInLambda = uvPixelSize / phstWavelength[ /* SPW = */ 0 ][ /* CHANNEL = */ 0 ];	// in units of lambda
+	double uvPixelSizeInLambda = uvPixelSize / AverageWavelength;					// in units of lambda
 	double imFieldOfView = (180.0 * 3600.0 / PI) * (1.0 / uvPixelSizeInLambda);				// in arcsec
 	
 	// set the beam cell size and frequency.
 	_param->BeamInCellSize = imFieldOfView / workspaceSize;
-	
-	int cumulativeChannel = 0;
-	for ( int spw = 0; spw < pNumSpws; spw++ )
-		for ( int channel = 0; channel < phstNumChannels[ spw ]; channel++, cumulativeChannel++ )
+
+	// calculate the max and min radius using the width and blockage. we divide by two to get the radius, and square (so we don't need to keep taking
+	// square roots).
+	// we scale the radii by the ratio of wavelengths to that of spw 0, channel 0, in order that shorter wavelengths create larger apertures.
+	double maxRadius = pow( pWidth * PIXELS_PER_METRE / 2, 2 );
+	double minRadius = pow( pCutout * PIXELS_PER_METRE / 2, 2 );
+
+	long int beamPtr = 0;
+	for ( int j = 0; j < workspaceSize; j++ )
+		for ( int i = 0; i < workspaceSize; i++, beamPtr++ )
 		{
+			double r = (double) (pow( i - workspaceSupport, 2 ) + pow( j - workspaceSupport, 2 ));
+			hstBeam[ beamPtr ].x = ( r >= minRadius && r <= maxRadius ? 1.0 : 0.0 );
+		}
 
-			// calculate the max and min radius using the width and blockage. we divide by two to get the radius, and square (so we don't need to keep taking
-			// square roots).
-			// we scale the radii by the ratio of wavelengths to that of spw 0, channel 0, in order that shorter wavelengths create larger apertures.
-			double maxRadius = pow( pWidth * PIXELS_PER_METRE * phstWavelength[ /* SPW = */ 0 ][ /* CHANNEL = */ 0 ] /
-									(2.0 * phstWavelength[ spw ][ channel ]), 2 );
-			double minRadius = pow( pCutout * PIXELS_PER_METRE * phstWavelength[ /* SPW = */ 0 ][ /* CHANNEL = */ 0 ] /
-									(2.0 * phstWavelength[ spw ][ channel ]), 2 );
+	// copy beam to device.
+	moveHostToDevice( (void *) devBeam, (void *) hstBeam, workspaceSize * workspaceSize * sizeof( cufftComplex ),
+				"copying primary beam to device", __LINE__ );
 
-			long int beamPtr = 0;
-			for ( int j = 0; j < workspaceSize; j++ )
-				for ( int i = 0; i < workspaceSize; i++, beamPtr++ )
-				{
-					double r = (double) (pow( i - workspaceSupport, 2 ) + pow( j - workspaceSupport, 2 ));
-					hstBeam[ beamPtr ].x = ( r >= minRadius && r <= maxRadius ? 1.0 : 0.0 );
-				}
+	// FFT the primary beam into the uv domain.
+	performFFT(	/* pdevGrid = */ (cufftComplex **) &devBeam,
+			/* pSize = */ workspaceSize,
+			/* pFFTDirection = */ FORWARD,
+			/* pFFTPlan = */ -1,
+			/* pFFTType = */ C2C,
+			/* pResizeArray = */ false );
 
-			// copy beam to device.
-			moveHostToDevice( (void *) devBeam, (void *) hstBeam, workspaceSize * workspaceSize * sizeof( cufftComplex ),
-						"copying primary beam to device", __LINE__ );
+	// get the maximum value from the beam. create a new memory area to hold the maximum pixel value.
+	double * devMaxValue;
+	reserveGPUMemory( (void **) &devMaxValue, MAX_PIXEL_DATA_AREA_SIZE * sizeof( double ), "declaring device memory for kernel max pixel value", 
+																			__LINE__ );
 
-			// FFT the primary beam into the uv domain.
-			performFFT(	/* pdevGrid = */ (cufftComplex **) &devBeam,
-					/* pSize = */ workspaceSize,
-					/* pFFTDirection = */ FORWARD,
-					/* pFFTPlan = */ -1,
-					/* pFFTType = */ C2C,
-					/* pResizeArray = */ false );
+	// get the peak value from the kernel.
+	getMaxValue(	/* pdevImage = */ devBeam,
+			/* pdevMaxValue = */ devMaxValue,
+			/* pWidth = */ workspaceSize,
+			/* pHeight = */ workspaceSize,
+			/* pIncludeComplexComponent = */ true,
+			/* pMultiplyByConjugate = */ true,
+			/* pdevMask = */ NULL );
 
-			// get the maximum value from the beam. create a new memory area to hold the maximum pixel value.
-			double * devMaxValue;
-			reserveGPUMemory( (void **) &devMaxValue, MAX_PIXEL_DATA_AREA_SIZE * sizeof( double ), "declaring device memory for kernel max pixel value", 
-																					__LINE__ );
+	// get the maximum value, and its position.
+	double maxValue = 0.0;
+	cudaMemcpy( &maxValue, &devMaxValue[ MAX_PIXEL_VALUE ], sizeof( double ), cudaMemcpyDeviceToHost );
 
-			// get the peak value from the kernel.
-			getMaxValue(	/* pdevImage = */ devBeam,
-					/* pdevMaxValue = */ devMaxValue,
-					/* pWidth = */ workspaceSize,
-					/* pHeight = */ workspaceSize,
-					/* pIncludeComplexComponent = */ true,
-					/* pMultiplyByConjugate = */ true,
-					/* pdevMask = */ NULL );
+	// free the max value memory area.
+	if (devMaxValue != NULL)
+		cudaFree( (void *) devMaxValue );
 
-			// get the maximum value, and its position.
-			double maxValue = 0.0;
-			cudaMemcpy( &maxValue, &devMaxValue[ MAX_PIXEL_VALUE ], sizeof( double ), cudaMemcpyDeviceToHost );
+	// define the block/thread dimensions.
+	int threads = workspaceSize * workspaceSize;
+	int blocks;
+	setThreadBlockSize1D( &threads, &blocks );
 
-			// free the max value memory area.
-			if (devMaxValue != NULL)
-				cudaFree( (void *) devMaxValue );
+	// normalise the image
+	devNormalise<<< blocks, threads >>>(	/* pArray = */ devBeam,
+						/* pConstant = */ sqrt( maxValue ),
+						/* pItems = */ workspaceSize * workspaceSize );
 
-			// define the block/thread dimensions.
-			int threads = workspaceSize * workspaceSize;
-			int blocks;
-			setThreadBlockSize1D( &threads, &blocks );
+	// reduce the size by a factor of 6.
+	threads = _param->BeamInSize * _param->BeamInSize;
+	setThreadBlockSize1D( &threads, &blocks );
 
-			// normalise the image
-			devNormalise<<< blocks, threads >>>(	/* pArray = */ devBeam,
-								/* pConstant = */ sqrt( maxValue ),
-								/* pItems = */ workspaceSize * workspaceSize );
+	// move the centre of the image into the first part of the image.
+	devMoveToStartOfImage<<< blocks, threads >>>(	/* pImage = */ devBeam,
+							/* pInitialSize = */ workspaceSize,
+							/* pFinalSize = */ _param->BeamInSize );
 
-			// reduce the size by a factor of 6.
-			threads = _param->BeamInSize * _param->BeamInSize;
-			setThreadBlockSize1D( &threads, &blocks );
-
-			// move the centre of the image into the first part of the image.
-			devMoveToStartOfImage<<< blocks, threads >>>(	/* pImage = */ devBeam,
-									/* pInitialSize = */ workspaceSize,
-									/* pFinalSize = */ _param->BeamInSize );
-
-			// copy primary beam back to host.
-			cudaMemcpy( (void *) &(phstJonesMatrix[ /* CELL = */ 0 ][ cumulativeChannel * _param->BeamInSize * _param->BeamInSize ]), (void *) devBeam,
-									_param->BeamInSize * _param->BeamInSize * sizeof( cufftComplex ), cudaMemcpyDeviceToHost );
-	
-		} // LOOP: spw & channel
+	// copy primary beam back to host.
+	cudaMemcpy( (void *) JonesMatrixIn[ /* CELL = */ 0 ], (void *) devBeam,
+							_param->BeamInSize * _param->BeamInSize * sizeof( cufftComplex ), cudaMemcpyDeviceToHost );
 							
 	// copy primary beam from cell 0 to cell 3.
-	memcpy( (void *) phstJonesMatrix[ /* CELL = */ 3 ], (void *) phstJonesMatrix[ /* CELL = */ 0 ],
-							totalChannels * _param->BeamInSize * _param->BeamInSize * sizeof( cufftComplex ) );
+	memcpy( (void *) JonesMatrixIn[ /* CELL = */ 3 ], (void *) JonesMatrixIn[ /* CELL = */ 0 ],
+							_param->BeamInSize * _param->BeamInSize * sizeof( cufftComplex ) );
 
 	// free memory.
 	if (devBeam != NULL)
@@ -5632,29 +5692,19 @@ void Data::generatePrimaryBeamAiry
 
 void Data::generatePrimaryBeamGaussian
 	(
-	cufftComplex ** phstJonesMatrix,		// the primary beam array in which to place the generated beams. this is the full Jones matrix, and we
-							//		only generate images in cells 0, and 3. cells 1 and 2 remain empty.
-	double pWidth,					// the width of the dish
-	int pNumSpws,					// the number of spws
-	int * phstNumChannels,				// the number of channels per spw
-	double ** phstWavelength			// the wavelength
+	double pWidth					// the width of the dish
 	)
 {
 
 	printf( "generating primary beam using a Gaussian based upon a %4.2f m aperture dish.....\n", pWidth );
-	
-	// count the number of channels.
-	int totalChannels = 0;
-	for ( int spw = 0; spw < pNumSpws; spw++ )
-		totalChannels += phstNumChannels[ spw ];
 
 	_param->BeamInSize = Parameters::BEAM_SIZE; // in pixels
 
 	// create primary beams on the host. we only set the diagonal array elements because these give us all the non-leakage beam patterns for I, Q, U and V.
 	for ( int i = 0; i < 4; i += 3 )
 	{
-		phstJonesMatrix[ /* CELL = */ i ] = (cufftComplex *) malloc( totalChannels * _param->BeamInSize * _param->BeamInSize * sizeof( cufftComplex ) );
-		memset( (void *) phstJonesMatrix[ /* CELL = */ i ], 0, totalChannels * _param->BeamInSize * _param->BeamInSize * sizeof( cufftComplex ) );
+		JonesMatrixIn[ /* CELL = */ i ] = (cufftComplex *) malloc( _param->BeamInSize * _param->BeamInSize * sizeof( cufftComplex ) );
+		memset( (void *) JonesMatrixIn[ /* CELL = */ i ], 0, _param->BeamInSize * _param->BeamInSize * sizeof( cufftComplex ) );
 	}
 
 	// create beam on device.
@@ -5663,65 +5713,34 @@ void Data::generatePrimaryBeamGaussian
 	
 	// calculate the image-plane FWHM of the beam (in arcseconds), and the beam cell size in pixels. the whole image should be 4x the beam width of spw 0, channel 0.
 	// the fwhm of an airy disk is roughly 1.028 lambda/D, but this is the power pattern; the fwhm of the voltage pattern is 1.028 x sqrt(2) lambda/D = 1.454 lambda/D.
-	double maxLambda = phstWavelength[ /* SPW = */ 0 ][ /* CHANNEL = */ 0 ];
-	double fwhm = (180.0 * 3600.0 / PI) * 1.454 * maxLambda / pWidth;	// in arcseconds	// 1.15 // 1.028
+	double fwhm = (180.0 * 3600.0 / PI) * 1.454 * AverageWavelength / pWidth;		// in arcseconds	// 1.15 // 1.028
 	_param->BeamInCellSize = fwhm * 4.0 / (double) _param->BeamInSize;			// in arcseconds
 	
-	printf( "        max wavelength %f m, fwhm %f arcseconds, beam cell size %f arcseconds\n\n", maxLambda, fwhm, _param->BeamInCellSize );
-
-	int cumulativeChannel = 0;
-	for ( int spw = 0; spw < pNumSpws; spw++ )
-		for ( int channel = 0; channel < phstNumChannels[ spw ]; channel++, cumulativeChannel++ )
-		{
+	printf( "        avg. wavelength %f m, fwhm (%f arcseconds, voltage pattern, or %f arcseconds, power pattern), beam cell size %f arcseconds\n\n", AverageWavelength, fwhm, fwhm / sqrt(2), _param->BeamInCellSize );
 		
-			// calculate the FWHM, and radius of the Gaussian, both in pixels, for this channel.
-			// the Gaussian has form: exp( -(x / radius)^2 ), and the FWHM is given by  2.radius.sqrt( ln2 )
-			fwhm = (180.0 * 3600.0 / PI) * 1.454 * phstWavelength[ spw ][ channel ] / (pWidth * _param->BeamInCellSize);	// 1.15 // 1.028
-			double radius = (fwhm / 2.0) / sqrt( log( 2 ) );	// in C++ log(X) gives the natural log.
+	// calculate the FWHM, and radius of the Gaussian, both in pixels, for this channel.
+	// the Gaussian has form: exp( -(x / radius)^2 ), and the FWHM is given by  2.radius.sqrt( ln2 )
+	fwhm = (180.0 * 3600.0 / PI) * 1.454 * AverageWavelength / (pWidth * _param->BeamInCellSize);	// 1.15 // 1.028
+	double radius = (fwhm / 2.0) / sqrt( log( 2 ) );	// in C++ log(X) gives the natural log.
 
-			// define the block/thread dimensions.
-			setThreadBlockSize2D( _param->BeamInSize, _param->BeamInSize, _gridSize2D, _blockSize2D );
+	// define the block/thread dimensions.
+	setThreadBlockSize2D( _param->BeamInSize, _param->BeamInSize, _gridSize2D, _blockSize2D );
 
-			// construct the primary beam on the device.
-			devMakeBeam<<< _gridSize2D, _blockSize2D >>>(	/* pBeam = */ devBeam,
-									/* pAngle = */ 0.0,
-									/* pR1 = */ radius,
-									/* pR2 = */ radius,
-									/* pX = */ (double) (_param->BeamInSize / 2),
-									/* pY = */ (double) (_param->BeamInSize / 2),
-									/* pSize = */ _param->BeamInSize );
+	// construct the primary beam on the device.
+	devMakeBeam<<< _gridSize2D, _blockSize2D >>>(	/* pBeam = */ devBeam,
+							/* pAngle = */ 0.0,
+							/* pR1 = */ radius,
+							/* pR2 = */ radius,
+							/* pX = */ (double) (_param->BeamInSize / 2),
+							/* pY = */ (double) (_param->BeamInSize / 2),
+							/* pSize = */ _param->BeamInSize );
 
-			int items = _param->BeamInSize * _param->BeamInSize;
-			int stages = items / MAX_THREADS;
-			if (items % MAX_THREADS != 0)
-				stages++;
-
-			for ( int i = 0; i < stages; i++ )
-			{
-
-				// define the block/thread dimensions.
-				int itemsThisStage = items - (i * MAX_THREADS);
-				if (itemsThisStage > MAX_THREADS)
-					itemsThisStage = MAX_THREADS;
-				int threads = itemsThisStage;
-				int blocks;
-				setThreadBlockSize1D( &threads, &blocks );
-									
-				// take the square root of each array element.
-//				devSquareRoot<<< _gridSize2D, _blockSize2D >>>(	/* pArray = */ &devBeam[ /* CELL = */ i * MAX_THREADS ],
-//											/* pSize = */ itemsThisStage );
-							
-			}
-
-			// copy primary beam back to host.
-			cudaMemcpy( (void *) &(phstJonesMatrix[ /* CELL = */ 0 ][ cumulativeChannel * _param->BeamInSize * _param->BeamInSize ]), (void *) devBeam,
-									_param->BeamInSize * _param->BeamInSize * sizeof( cufftComplex ), cudaMemcpyDeviceToHost );
-	
-		} // LOOP: spw & channel
+	// copy primary beam back to host.
+	cudaMemcpy( (void *) JonesMatrixIn[ /* CELL = */ 0 ], (void *) devBeam, _param->BeamInSize * _param->BeamInSize * sizeof( cufftComplex ), cudaMemcpyDeviceToHost );
 							
 	// copy primary beam from cell 0 to cell 3.
-	memcpy( (void *) phstJonesMatrix[ /* CELL = */ 3 ], (void *) phstJonesMatrix[ /* CELL = */ 0 ],
-							totalChannels * _param->BeamInSize * _param->BeamInSize * sizeof( cufftComplex ) );
+	memcpy( (void *) JonesMatrixIn[ /* CELL = */ 3 ], (void *) JonesMatrixIn[ /* CELL = */ 0 ],
+							_param->BeamInSize * _param->BeamInSize * sizeof( cufftComplex ) );
 
 	// free memory.
 	if (devBeam != NULL)
@@ -5974,14 +5993,22 @@ bool Data::loadPrimaryBeam
 	
 		fileData = NULL;
 	
-		if (beam == 0)
+		if (beam == 0 && _param->BeamStokes == false)
 			printf( "        loading XX " );
-		else if (beam == 1)
+		else if (beam == 1 && _param->BeamStokes == false)
 			printf( ", XY " );
-		else if (beam == 2)
+		else if (beam == 2 && _param->BeamStokes == false)
 			printf( ", YX " );
-		else if (beam == 3)
+		else if (beam == 3 && _param->BeamStokes == false)
 			printf( ", YY " );
+		else if (beam == 0 && _param->BeamStokes == true)
+			printf( "        loading J_00 " );
+		else if (beam == 1 && _param->BeamStokes == true)
+			printf( ", J_01 " );
+		else if (beam == 2 && _param->BeamStokes == true)
+			printf( ", J_10 " );
+		else if (beam == 3 && _param->BeamStokes == true)
+			printf( ", J_11 " );
 		fflush( stdout );
 		
 		char filename[ 100 ];
@@ -5989,10 +6016,14 @@ bool Data::loadPrimaryBeam
 		for ( int i = 0; i < strlen( filename ) - 1; i++ )
 			if (filename[ i ] == '*' && filename[ i + 1 ] == '*')
 			{
-				if (beam == 0)		{ filename[ i ] = 'X'; filename[ i + 1 ] = 'X'; }
-				else if (beam == 1)	{ filename[ i ] = 'X'; filename[ i + 1 ] = 'Y'; }
-				else if (beam == 2)	{ filename[ i ] = 'Y'; filename[ i + 1 ] = 'X'; }
-				else if (beam == 3)	{ filename[ i ] = 'Y'; filename[ i + 1 ] = 'Y'; }
+				if (beam == 0 && _param->BeamStokes == false)		{ filename[ i ] = 'X'; filename[ i + 1 ] = 'X'; }
+				else if (beam == 1 && _param->BeamStokes == false)	{ filename[ i ] = 'X'; filename[ i + 1 ] = 'Y'; }
+				else if (beam == 2 && _param->BeamStokes == false)	{ filename[ i ] = 'Y'; filename[ i + 1 ] = 'X'; }
+				else if (beam == 3 && _param->BeamStokes == false)	{ filename[ i ] = 'Y'; filename[ i + 1 ] = 'Y'; }
+				else if (beam == 0 && _param->BeamStokes == true)	{ filename[ i ] = 'J'; filename[ i + 1 ] = '0'; }
+				else if (beam == 1 && _param->BeamStokes == true)	{ filename[ i ] = 'J'; filename[ i + 1 ] = '1'; }
+				else if (beam == 2 && _param->BeamStokes == true)	{ filename[ i ] = 'J'; filename[ i + 1 ] = '2'; }
+				else if (beam == 3 && _param->BeamStokes == true)	{ filename[ i ] = 'J'; filename[ i + 1 ] = '3'; }
 			}
 			
 		long int fileSize = 0;
@@ -6132,7 +6163,7 @@ bool Data::loadPrimaryBeam
 	bool success = true;
 	if (stokesFound[ 0 ] == false || stokesFound[ 3 ] == false)
 	{
-		printf( "WARNING: the primary beam is missing either XX or YY. We will generate a beam instead\n\n" );
+		printf( "WARNING: cannot find all the data for the primary beams. We will generate a beam instead\n\n" );
 		success = false;
 	}
 	
@@ -6179,13 +6210,13 @@ void Data::mergeData( int pStageID_one, int pStageID_two, bool pLoadAllData, int
 			char filenameOld[ 255 ], filenameNew[ 255 ];
 			if (_param->CacheLocation[0] != '\0')
 			{
-				sprintf( filenameNew, "%s%s-%i-%i-cache.dat", _param->CacheLocation, _param->OutputPrefix, _mosaicID, stageID );
-				sprintf( filenameOld, "%s%s-%i-%i-cache.dat", _param->CacheLocation, _param->OutputPrefix, _mosaicID, stageID + 1 );
+				sprintf( filenameNew, "%s%s-%i-%i-cache.dat", _param->CacheLocation, _param->OutputPrefix, MosaicID, stageID );
+				sprintf( filenameOld, "%s%s-%i-%i-cache.dat", _param->CacheLocation, _param->OutputPrefix, MosaicID, stageID + 1 );
 			}
 			else
 			{
-				sprintf( filenameNew, "%s-%i-%i-cache.dat", _param->OutputPrefix, _mosaicID, stageID );
-				sprintf( filenameOld, "%s-%i-%i-cache.dat", _param->OutputPrefix, _mosaicID, stageID + 1 );
+				sprintf( filenameNew, "%s-%i-%i-cache.dat", _param->OutputPrefix, MosaicID, stageID );
+				sprintf( filenameOld, "%s-%i-%i-cache.dat", _param->OutputPrefix, MosaicID, stageID + 1 );
 			}
 
 			// rename file.
@@ -6201,9 +6232,9 @@ void Data::mergeData( int pStageID_one, int pStageID_two, bool pLoadAllData, int
 		// build filename.
 		char filename[ 255 ];
 		if (_param->CacheLocation[0] != '\0')
-			sprintf( filename, "%s%s-%i-%i-cache.dat", _param->CacheLocation, _param->OutputPrefix, _mosaicID, pStageID_two );
+			sprintf( filename, "%s%s-%i-%i-cache.dat", _param->CacheLocation, _param->OutputPrefix, MosaicID, pStageID_two );
 		else
-			sprintf( filename, "%s-%i-%i-cache.dat", _param->OutputPrefix, _mosaicID, pStageID_two );
+			sprintf( filename, "%s-%i-%i-cache.dat", _param->OutputPrefix, MosaicID, pStageID_two );
 
 		// remove file.
 		remove( filename );
@@ -6643,44 +6674,34 @@ void Data::reprojectPrimaryBeams
 			double pMaxWavelength				// the maximum wavelength in this measurement set
 			)
 {
-								
+
 	// reproject primary beam at average wavelength to correct position.		
 	PrimaryBeam = ReprojectPrimaryBeam(	/* pBeamOutSize = */ pBeamOutSize,
 						/* pBeamOutCellSize = */ pBeamOutCellSize,
 						/* pToRA = */ pOutputRA,
 						/* pToDEC = */ pOutputDEC,
-						/* pToWavelength = */ AverageWavelength );
-							
+						/* pToWavelength = */ AverageWavelength,
+						/* pVerbose = */ true );
+
 	// reproject primary beam at maximum wavelength to correct position.		
 	float * tmpPrimaryBeamMaxWavelength = ReprojectPrimaryBeam(	/* pBeamOutSize = */ pBeamOutSize,
 									/* pBeamOutCellSize = */ pBeamOutCellSize,
 									/* pToRA = */ pOutputRA,
 									/* pToDEC = */ pOutputDEC,
-									/* pToWavelength = */ pMaxWavelength );
+									/* pToWavelength = */ pMaxWavelength,
+									/* pVerbose = */ false );
 
-	// construct the primary beam ratio.
-	PrimaryBeamRatio = (float *) malloc( pBeamOutSize * pBeamOutSize * sizeof( float ) );
-			
-	// divide the primary beam by the primary beam at the maximum wavelength, because it the ratio that we need to use.
-	for ( int i = 0; i < pBeamOutSize * pBeamOutSize; i++ )
-	{
-		if (tmpPrimaryBeamMaxWavelength[ i ] != 0.0)
-			PrimaryBeamRatio[ i ] = PrimaryBeam[ i ] / tmpPrimaryBeamMaxWavelength[ i ];
-		else
-			PrimaryBeamRatio[ i ] = 1.0;
-		PrimaryBeamRatio[ i ] = pow( pow( 0.2, 4 ) + pow( PrimaryBeamRatio[ i ], 4 ), 0.25 );
-	}
-			
 	if (tmpPrimaryBeamMaxWavelength != NULL)
 		free( (void *) tmpPrimaryBeamMaxWavelength );
-						
+
 	// if we've doing an image-plane mosaic then reproject the primary beam to the phase position in the frame of each mosaic component.
 	if (pImagePlaneMosaic == true)		
 		PrimaryBeamInFrame = ReprojectPrimaryBeam(	/* pBeamOutSize = */ pBeamOutSize,
 								/* pBeamOutCellSize = */ pBeamOutCellSize,
 								/* pToRA = */ PhaseToRA,
 								/* pToDEC = */ PhaseToDEC,
-								/* pToWavelength = */ AverageWavelength );
+								/* pToWavelength = */ AverageWavelength,
+								/* pVerbose = */ false );
 
 } // reprojectPrimaryBeams
 

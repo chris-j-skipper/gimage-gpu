@@ -24,7 +24,7 @@
 	__host__ __device__ cufftDoubleComplex divideComplex( double pOne, cufftDoubleComplex pTwo );
 	__host__ __device__ double gaussian2D( double pNormalisation, double pX, double pY, double pAngle, double pR1, double pR2 );
 	__host__ __device__ int intFloor( int pValue1, int pValue2 );
-	__host__ __device__ double interpolateBeam( float * pBeam, int pBeamSize, int pI, int pJ, double pFracI, double pFracJ );
+	__host__ __device__ float interpolateBeam( float * pBeam, int pBeamSize, int pI, int pJ, double pFracI, double pFracJ );
 	__host__ __device__ cufftComplex interpolateBeam( cufftComplex * pBeam, int pBeamSize, int pI, int pJ, double pFracI, double pFracJ );
 	__host__ __device__ int mod( int pValue1, int pValue2 );
 	__host__ __device__ cufftDoubleComplex multComplex( cufftDoubleComplex pOne, double pTwo );
@@ -49,7 +49,7 @@
 	__global__ void devConvertImage( cufftComplex * pOut, cufftDoubleComplex * pIn, int pSize );
 	__global__ void devConvertImage( cufftComplex * pOut, float * pIn, int pSize );
 	__global__ void devConvertImage( float * pOut, cufftDoubleComplex * pIn, int pSize );
-	__global__ void devDivideImages( float * pOne, float * pTwo, bool * pMask, int pSizeOne, int pSizeTwo );
+	__global__ void devDivideImages( float * pOne, float * pTwo, bool * pMask, int pSizeOne, int pSizeTwo, bool pInterpolate );
 	__global__ void devDivideImages( cufftComplex * pOne, cufftComplex * pTwo, bool * pMask, int pSizeOne, int pSizeTwo );
 	__global__ void devDivideImages( cufftDoubleComplex * pOne, float * pTwo, bool * pMask, int pSizeOne, int pSizeTwo );
 	__global__ void devDivideImages( cufftComplex * pOne, float * pTwo, bool * pMask, int pSizeOne, int pSizeTwo );
@@ -65,7 +65,7 @@
 	__global__ void devFindCutoffPixelParallel( float * pKernel, int pSize, double * pMaxValue, int pCellsPerThread, int * pTmpResults, double pCutoffFraction, findpixel pFindType );
 	__global__ void devGetMaxValue( double * pArray, double * pMaxValue, bool pUseAbsolute, int pElements );
 	__global__ void devGetMaxValueParallel( cufftComplex * pArray, int pWidth, int pHeight, int pCellsPerThread, double * pBlockMax, bool pIncludeComplexComponent, bool pMultiplyByConjugate, bool * pMask );
-	__global__ void devGetMaxValueParallel( float * pArray, int pWidth, int pHeight, int pCellsPerThread, double * pBlockMax, bool pUseAbsolute, bool * pMask );
+	__global__ void devGetMaxValueParallel( float * pArray, int pWidth, int pHeight, int pNumImages, int pCellsPerThread, double * pBlockMax, bool pUseAbsolute, bool * pMask );
 	__global__ void devGetPrimaryBeam( float * pPrimaryBeam, cufftDoubleComplex ** pMueller, int pImageSize, int pStokes );
 	__global__ void devMakeBeam( float * pBeam, double pAngle, double pR1, double pR2, double pX, double pY, int pSize );
 	__global__ void devMakeBeam( cufftComplex * pBeam, double pAngle, double pR1, double pR2, double pX, double pY, int pSize );
@@ -75,7 +75,7 @@
 	__global__ void devMultiplyArrays( cufftComplex * pOne, cufftComplex * pTwo, int pSize, bool pConjugate );
 	__global__ void devMultiplyArrays( float * pOne, float * pTwo, int pSize );
 	__global__ void devMultiplyArrays( float * pOne, float * pTwo, bool * pMask, int pSizeOne, int pSizeTwo );
-	__global__ void devMultiplyImages( float * pOne, float * pTwo, bool * pMask, int pSizeOne, int pSizeTwo );
+	__global__ void devMultiplyImages( float * pOne, float * pTwo, bool * pMask, int pSizeOne, int pSizeTwo, bool pInterpolate );
 	__global__ void devMultiplyImages( cufftComplex * pOne, cufftComplex * pTwo, bool * pMask, int pSizeOne, int pSizeTwo );
 	__global__ void devMultiplyImages( cufftComplex * pOne, float * pTwo, bool * pMask, int pSizeOne, int pSizeTwo );
 	__global__ void devMultiplyImages( cufftDoubleComplex * pOne, cufftComplex * pTwo, bool * pMask, int pSizeOne, int pSizeTwo );
@@ -113,7 +113,7 @@
 	int findCutoffPixel( cufftComplex * pdevKernel, double * pdevMaxValue, int pSize, double pCutoffFraction, findpixel pFindType );
 	int findCutoffPixel( float * pdevKernel, double * pdevMaxValue, int pSize, double pCutoffFraction, findpixel pFindType );
 	bool getMaxValue( cufftComplex * pdevImage, double * pdevMaxValue, int pWidth, int pHeight, bool pIncludeComplexComponent, bool pMultiplyByConjugate, bool * pdevMask );
-	bool getMaxValue( float * pdevImage, double * pdevMaxValue, int pWidth, int pHeight, bool pUseAbsolute, bool * pdevMask );
+	bool getMaxValue( float * pdevImage, double * pdevMaxValue, int pWidth, int pHeight, bool pUseAbsolute, bool * pdevMask, int pNumImages );
 	cufftHandle initialiseFFT( int pSize );
 	bool performFFT( cufftComplex ** pdevGrid, int pSize, fftdirection pFFTDirection, cufftHandle pFFTPlan, ffttype pFFTType, bool pResizeArray );
 	double rad( double pIn );

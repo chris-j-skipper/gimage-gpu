@@ -39,6 +39,7 @@ using namespace std;
 	const char Parameters::AIRY_DISK_DIAMETER[] = "airy-disk-diameter:";
 	const char Parameters::AIRY_DISK_BLOCKAGE[] = "airy-disk-blockage:";
 	const char Parameters::BEAM_PATTERN[] = "beam-pattern:";
+	const char Parameters::BEAM_STOKES[] = "beam-stokes:";
 	const char Parameters::BEAM_SIZE_PIXELS[] = "beam-size:";
 	const char Parameters::BEAM_CELL_SIZE[] = "beam-cell-size:";
 	const char Parameters::BEAM_TYPE[] = "beam-type:";
@@ -116,6 +117,7 @@ Parameters::Parameters()
 	BeamInSize = -1;
 	BeamInCellSize = -1.0;
 	BeamPattern = NULL;			// the file or files with the primary beam patterns.
+	BeamStokes = false;			// true if the beam patterns are the Stokes beam patterns I, Q, U and V, or false if they're XX, XY, YX, YY.
 	BeamType = AIRY;			// the primary beam type - can be AIRY, GAUSSIAN, or FROMFILE if it's being loaded.
 	BeamID = NULL;				// the ASKAP PAF beam ID for each measurement set.
 	
@@ -357,6 +359,11 @@ void Parameters::GetParameters( char * pParameterFile )
 					strcpy( BeamPattern[ i ], params );
 
 		}
+		else if (strcmp( par, BEAM_STOKES ) == 0)
+		{
+			if (strcmp( params, "Y" ) == 0 || strcmp( params, "y" ) == 0 || strcmp( params, "YES" ) == 0 || strcmp( params, "yes" ) == 0)
+				BeamStokes = true;
+		}
 		else if (strcmp( par, BEAM_ID ) == 0)
 		{
 
@@ -467,6 +474,8 @@ void Parameters::GetParameters( char * pParameterFile )
 				Stokes = STOKES_U;
 			else if (strcmp( params, "V" ) == 0 || strcmp( params, "v" ) == 0)
 				Stokes = STOKES_V;
+			else if (strcmp( params, "IQUV" ) == 0 || strcmp( params, "iquv" ) == 0)
+				Stokes = STOKES_ALL;
 		}
 		else if (strcmp( par, TELESCOPE ) == 0)
 		{

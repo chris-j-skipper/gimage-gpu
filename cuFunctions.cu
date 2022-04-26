@@ -260,10 +260,10 @@ __host__ __device__ int intFloor( int pValue1, int pValue2 )
 //	Bi-linear interpolation of the primary beam.
 //
 
-__host__ __device__ double interpolateBeam( float * pBeam, int pBeamSize, int pI, int pJ, double pFracI, double pFracJ )
+__host__ __device__ float interpolateBeam( float * pBeam, int pBeamSize, int pI, int pJ, double pFracI, double pFracJ )
 {
 
-	double beam = 0.0;
+	float beam = 0.0;
 
 	if (pI >= 0 && pI < pBeamSize - 1 && pJ >= 0 && pJ < pBeamSize - 1)
 	{
@@ -273,7 +273,7 @@ __host__ __device__ double interpolateBeam( float * pBeam, int pBeamSize, int pI
 		double beamBR = pBeam[ (pJ * pBeamSize) + pI + 1 ];
 		double beamTop = ((beamTR - beamTL) * pFracI) + beamTL;
 		double beamBottom = ((beamBR - beamBL) * pFracI) + beamBL;
-		beam = ((beamTop - beamBottom) * pFracJ) + beamBottom;
+		beam = (float) (((beamTop - beamBottom) * pFracJ) + beamBottom);
 	}
 	
 	// return something.
@@ -623,7 +623,7 @@ __global__ void devConvertImage
 //	Divide one image by another, possibly of a different size.
 //
 
-__global__ void devDivideImages( float * pOne, float * pTwo, bool * pMask, int pSizeOne, int pSizeTwo )
+__global__ void devDivideImages( float * pOne, float * pTwo, bool * pMask, int pSizeOne, int pSizeTwo, bool pInterpolate )
 {
 	
 	int i = (blockIdx.x * blockDim.x) + threadIdx.x;
@@ -639,17 +639,44 @@ __global__ void devDivideImages( float * pOne, float * pTwo, bool * pMask, int p
 			masked = (pMask[ (j * pSizeOne) + i ] == false);
 		if (masked == false)
 		{
-
-			// calculate position in image two.			
-			int iTwo = (int) ((double) i * (double) pSizeTwo / (double) pSizeOne);
-			int jTwo = (int) ((double) j * (double) pSizeTwo / (double) pSizeOne);
+		
+			// are we using bilinear interpolation ?
+			if (pInterpolate == true && pSizeOne > pSizeTwo)
+			{
 			
-			// divide images.
-			float two = pTwo[ (jTwo * pSizeTwo) + iTwo ];
-			if (two != 0.0)
-				pOne[ (j * pSizeOne) + i ] /= two;
+				double iTwo = (double) i * (double) pSizeTwo / (double) pSizeOne;
+				double jTwo = (double) j * (double) pSizeTwo / (double) pSizeOne;
+				double fracI = iTwo - floor( iTwo );
+				double fracJ = jTwo - floor( jTwo );
+				float two = interpolateBeam(	/* pBeam = */ pTwo,
+								/* pBeamSize = */ pSizeTwo,
+								/* pI = */ (int) floor( iTwo ),
+								/* pJ = */ (int) floor( jTwo ),
+								/* pFracI = */ fracI,
+								/* pFracJ = */ fracJ );
+		
+				// multiply images.
+				if (two != 0.0)
+					pOne[ (j * pSizeOne) + i ] /= two;
+				else
+					pOne[ (j * pSizeOne) + i ] = 0.0;
+			
+			}
 			else
-				pOne[ (j * pSizeOne) + i ] = 0.0;
+			{
+
+				// calculate position in image two.			
+				int iTwo = (int) ((double) i * (double) pSizeTwo / (double) pSizeOne);
+				int jTwo = (int) ((double) j * (double) pSizeTwo / (double) pSizeOne);
+				
+				// divide images.
+				float two = pTwo[ (jTwo * pSizeTwo) + iTwo ];
+				if (two != 0.0)
+					pOne[ (j * pSizeOne) + i ] /= two;
+				else
+					pOne[ (j * pSizeOne) + i ] = 0.0;
+			
+			}
 
 		}
 		else
@@ -1300,6 +1327,7 @@ __global__ void devGetMaxValue
 	double maxJ = 0;
 	double maxValueReal = 0;
 	double maxValueImag = 0;
+	double maxImage = 0;
 	
 	// get maximum value.
 	for ( int i = 0; i < pElements; i++ )
@@ -1316,6 +1344,7 @@ __global__ void devGetMaxValue
 			maxJ = pArray[ MAX_PIXEL_Y ];
 			maxValueReal = pArray[ MAX_PIXEL_REAL ];
 			maxValueImag = pArray[ MAX_PIXEL_IMAG ];
+			maxImage = pArray[ MAX_PIXEL_IMAGE ];
 		}
 		pArray = pArray + MAX_PIXEL_DATA_AREA_SIZE;
 			
@@ -1327,6 +1356,7 @@ __global__ void devGetMaxValue
 	pMaxValue[ MAX_PIXEL_Y ] = maxJ;
 	pMaxValue[ MAX_PIXEL_REAL ] = maxValueReal;
 	pMaxValue[ MAX_PIXEL_IMAG ] = maxValueImag;
+	pMaxValue[ MAX_PIXEL_IMAGE ] = maxImage;
 	
 } // devGetMaxValue
 
@@ -1415,6 +1445,7 @@ __global__ void devGetMaxValueParallel
 	shrMaxValue[ (threadIdx.x * MAX_PIXEL_DATA_AREA_SIZE) + MAX_PIXEL_Y ] = maxJ;
 	shrMaxValue[ (threadIdx.x * MAX_PIXEL_DATA_AREA_SIZE) + MAX_PIXEL_REAL ] = maxValueReal;
 	shrMaxValue[ (threadIdx.x * MAX_PIXEL_DATA_AREA_SIZE) + MAX_PIXEL_IMAG ] = maxValueImag;
+	shrMaxValue[ (threadIdx.x * MAX_PIXEL_DATA_AREA_SIZE) + MAX_PIXEL_IMAGE ] = 0;
 	
 	__syncthreads();
 	
@@ -1451,6 +1482,7 @@ __global__ void devGetMaxValueParallel
 		pBlockMax[ (blockIdx.x * MAX_PIXEL_DATA_AREA_SIZE) + MAX_PIXEL_Y ] = maxJ;
 		pBlockMax[ (blockIdx.x * MAX_PIXEL_DATA_AREA_SIZE) + MAX_PIXEL_REAL ] = maxValueReal;
 		pBlockMax[ (blockIdx.x * MAX_PIXEL_DATA_AREA_SIZE) + MAX_PIXEL_IMAG ] = maxValueImag;
+		pBlockMax[ (blockIdx.x * MAX_PIXEL_DATA_AREA_SIZE) + MAX_PIXEL_IMAGE ] = 0;
 	
 	}
 	
@@ -1461,6 +1493,7 @@ __global__ void devGetMaxValueParallel
 			float * pArray,				// the array to search
 			int pWidth,					// the array width
 			int pHeight,					// the array height
+			int pNumImages,				// the number of images to search through
 			int pCellsPerThread,				// the number of array cells we should search per thread
 			double * pBlockMax,				// an array that stores the maximum values per block
 			bool pUseAbsolute,				// true if we should take the absolute value of each pixel, rather than include negative numbers
@@ -1474,6 +1507,7 @@ __global__ void devGetMaxValueParallel
 	double maxValue = 0;
 	double maxI = 0;
 	double maxJ = 0;
+	double maxImage = 0;
 	
 	// get the starting cell index.
 	int cell = ((blockIdx.x * blockDim.x) + threadIdx.x) * pCellsPerThread;
@@ -1482,7 +1516,7 @@ __global__ void devGetMaxValueParallel
 	{
 		
 		// ensure we are within bounds.
-		if (i < pWidth * pHeight)
+		if (i < pWidth * pHeight * pNumImages)
 		{
 		
 			float value = pArray[ i ];
@@ -1496,8 +1530,10 @@ __global__ void devGetMaxValueParallel
 			if (((value > maxValue && pUseAbsolute == false) || (abs( value ) > abs( maxValue ) && pUseAbsolute == true)) && includeCell == true)
 			{
 				maxValue = (double) value;
-				maxI = (double) (i % pWidth);
-				maxJ = i / pWidth;
+				maxImage = (double) (i / (pWidth * pHeight));
+				int pixel = i % (pWidth * pHeight);
+				maxI = (double) (pixel % pWidth);
+				maxJ = (double) (pixel / pWidth);
 			}
 		
 		}
@@ -1510,6 +1546,7 @@ __global__ void devGetMaxValueParallel
 	shrMaxValue[ (threadIdx.x * MAX_PIXEL_DATA_AREA_SIZE) + MAX_PIXEL_Y ] = maxJ;
 	shrMaxValue[ (threadIdx.x * MAX_PIXEL_DATA_AREA_SIZE) + MAX_PIXEL_REAL ] = maxValue;
 	shrMaxValue[ (threadIdx.x * MAX_PIXEL_DATA_AREA_SIZE) + MAX_PIXEL_IMAG ] = 0;
+	shrMaxValue[ (threadIdx.x * MAX_PIXEL_DATA_AREA_SIZE) + MAX_PIXEL_IMAGE ] = maxImage;
 	
 	__syncthreads();
 	
@@ -1522,6 +1559,7 @@ __global__ void devGetMaxValueParallel
 		double maxJ = 0;
 		double maxValueReal = 0;
 		double maxValueImag = 0;
+		double maxImage = 0;
 	
 		for ( int i = 0; i < blockDim.x; i++ )
 		{
@@ -1536,6 +1574,7 @@ __global__ void devGetMaxValueParallel
 				maxJ = shrMaxValue[ (i * MAX_PIXEL_DATA_AREA_SIZE) + MAX_PIXEL_Y ];
 				maxValueReal = shrMaxValue[ (i * MAX_PIXEL_DATA_AREA_SIZE) + MAX_PIXEL_REAL ];
 				maxValueImag = shrMaxValue[ (i * MAX_PIXEL_DATA_AREA_SIZE) + MAX_PIXEL_IMAG ];
+				maxImage = shrMaxValue[ (i * MAX_PIXEL_DATA_AREA_SIZE) + MAX_PIXEL_IMAGE ];
 			}
 			
 		}
@@ -1546,6 +1585,7 @@ __global__ void devGetMaxValueParallel
 		pBlockMax[ (blockIdx.x * MAX_PIXEL_DATA_AREA_SIZE) + MAX_PIXEL_Y ] = maxJ;
 		pBlockMax[ (blockIdx.x * MAX_PIXEL_DATA_AREA_SIZE) + MAX_PIXEL_REAL ] = maxValueReal;
 		pBlockMax[ (blockIdx.x * MAX_PIXEL_DATA_AREA_SIZE) + MAX_PIXEL_IMAG ] = maxValueImag;
+		pBlockMax[ (blockIdx.x * MAX_PIXEL_DATA_AREA_SIZE) + MAX_PIXEL_IMAGE ] = maxImage;
 	
 	}
 	
@@ -1818,7 +1858,8 @@ __global__ void devMultiplyImages
 			float * pTwo,					// image two
 			bool * pMask,					// image mask
 			int pSizeOne,					// }- image sizes (we scale image two to be the same size as image one before multiplying)
-			int pSizeTwo					// }
+			int pSizeTwo,					// }
+			bool pInterpolate				// true if we use bilinear interpolation (only done if size 1 > size 2)
 			)
 {
 	
@@ -1835,13 +1876,37 @@ __global__ void devMultiplyImages
 			masked = (pMask[ (j * pSizeOne) + i ] == false);
 		if (masked == false)
 		{
-
-			// calculate position in image two.
-			int iTwo = (int) ((double) i * (double) pSizeTwo / (double) pSizeOne);
-			int jTwo = (int) ((double) j * (double) pSizeTwo / (double) pSizeOne);
 		
-			// multiply images.
-			pOne[ (j * pSizeOne) + i ] *= pTwo[ (jTwo * pSizeTwo) + iTwo ];
+			// are we using bilinear interpolation ?
+			if (pInterpolate == true && pSizeOne > pSizeTwo)
+			{
+			
+				double iTwo = (double) i * (double) pSizeTwo / (double) pSizeOne;
+				double jTwo = (double) j * (double) pSizeTwo / (double) pSizeOne;
+				double fracI = iTwo - floor( iTwo );
+				double fracJ = jTwo - floor( jTwo );
+				float beam = interpolateBeam(	/* pBeam = */ pTwo,
+								/* pBeamSize = */ pSizeTwo,
+								/* pI = */ (int) floor( iTwo ),
+								/* pJ = */ (int) floor( jTwo ),
+								/* pFracI = */ fracI,
+								/* pFracJ = */ fracJ );
+		
+				// multiply images.
+				pOne[ (j * pSizeOne) + i ] *= beam;
+			
+			}
+			else
+			{
+
+				// calculate position in image two.
+				int iTwo = (int) ((double) i * (double) pSizeTwo / (double) pSizeOne);
+				int jTwo = (int) ((double) j * (double) pSizeTwo / (double) pSizeOne);
+		
+				// multiply images.
+				pOne[ (j * pSizeOne) + i ] *= pTwo[ (jTwo * pSizeTwo) + iTwo ];
+			
+			}
 
 		}
 		else
@@ -2839,7 +2904,7 @@ bool getMaxValue( cufftComplex * pdevImage, double * pdevMaxValue, int pWidth, i
 	
 } // getMaxValue
 
-bool getMaxValue( float * pdevImage, double * pdevMaxValue, int pWidth, int pHeight, bool pUseAbsolute, bool * pdevMask )
+bool getMaxValue( float * pdevImage, double * pdevMaxValue, int pWidth, int pHeight, bool pUseAbsolute, bool * pdevMask, int pNumImages )
 {
 	
 	const int PIXELS_PER_THREAD = 32;
@@ -2850,7 +2915,7 @@ bool getMaxValue( float * pdevImage, double * pdevMaxValue, int pWidth, int pHei
 	// find a suitable thread/block size for finding the maximum pixel value. each thread block will find the max
 	// over N pixels (held in the above constant), and write the result to a shared memory array. a final loop will then
 	// get the max from the array.
-	int threads = (pWidth * pHeight / PIXELS_PER_THREAD) + 1, blocks = 1;
+	int threads = (pWidth * pHeight * pNumImages / PIXELS_PER_THREAD) + 1, blocks = 1;
 	setThreadBlockSize1D( &threads, &blocks );
 		
 	// declare global memory for writing the result of each block.
@@ -2865,6 +2930,7 @@ bool getMaxValue( float * pdevImage, double * pdevMaxValue, int pWidth, int pHei
 					(	/* pArray = */ pdevImage,
 						/* pWidth = */ pWidth,
 						/* pHeight = */ pHeight,
+						/* pNumImages = */ pNumImages,
 						/* pCellsPerThread = */ PIXELS_PER_THREAD,
 						/* pBlockMax = */ devTmpResults,
 						/* pUseAbsolute = */ pUseAbsolute,

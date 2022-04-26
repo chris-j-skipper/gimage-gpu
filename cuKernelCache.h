@@ -59,13 +59,17 @@ class KernelCache
 		
 		// default constructor
 		KernelCache();
+		KernelCache( int pPBChannels, int pWPlanes, bool pWProjection, bool pAProjection, bool pUseMosaicing, bool pUVPlaneMosaic, Data * pData, int pBeamSize,
+				int pStokesProducts, int pStokes, bool pLeakageCorrection, int pOversample, griddegrid pGridDegrid, float * phstPrimaryBeamAtMaxWavelength,
+				float * phstPrimaryBeamMosaicing, bool pCacheData );
+		void KernelCache_init();
    
 		// destructor
 		~KernelCache();
 
 		// overload the () operator.
-		KernelSet & operator()( int pPBChannel, int pStokes, int pWPlane );			// to change data members.
-		const KernelSet & operator()( int pPBChannel, int pStokes, int pWPlane ) const;	// to read data members.
+		KernelSet & operator()( int pPBChannel, int pStokesTo, int pStokesFrom, int pWPlane );			// to change data members.
+		const KernelSet & operator()( int pPBChannel, int pStokesTo, int pStokesFrom, int pWPlane ) const;		// to read data members.
 
 //
 //		ENUMERATED TYPES
@@ -83,7 +87,7 @@ class KernelCache
 //		GLOBAL VARIABLES
 //
 
-		vector<vector<vector<KernelSet> > > kernelSet;
+		vector<vector<vector<vector<KernelSet> > > > kernelSet;
 		int pbChannels;
 		int wPlanes;
 		bool wProjection;
@@ -99,7 +103,7 @@ class KernelCache
 
 		void CountVisibilities( Data * pData, int pMaxBatchSize, int pNumGPUs );
 		void CountVisibilities( int pBatchSize, int pNumGPUs );
-		void Create( int pPBChannels, int pWPlanes, bool pWProjection, bool pAProjection, bool pUseMosaicing, bool pUVPlaneMosaic, Data * pData, int pBeamSize, int pStokesProducts, int pStokes, int pOversample, griddegrid pGridDegrid, float * phstPrimaryBeamAtMaxWavelength, float * phstPrimaryBeamMosaicing );
+		void Create( int pPBChannels, int pWPlanes, bool pWProjection, bool pAProjection, bool pUseMosaicing, bool pUVPlaneMosaic, Data * pData, int pBeamSize, int pStokesProducts, int pStokes, bool pLeakageCorrection, int pOversample, griddegrid pGridDegrid, float * phstPrimaryBeamAtMaxWavelength, float * phstPrimaryBeamMosaicing, bool pCacheData );
 		void GenerateKernelCache( int pPBChannel );
 
 	private:
@@ -126,12 +130,14 @@ class KernelCache
 		int _oversampledBeamSize;
 		double _cellSize;
 		int _stokes;
+		bool _cacheData;
+		bool _leakageCorrection;
 		
 		// we hold the primary beam at the maximum wavelength in memory because we'll need it for each channel.
 		float * _devPrimaryBeamMaxWavelength;
 		
 		// we also need a primary beam for mosaicing.
-		float * _hstPrimaryBeamMosaicing;
+		float * _primaryBeamMosaicing;
 
 		// kernel calls.
 		dim3 _gridSize2D;

@@ -53,11 +53,12 @@ class Data
 	public:
 		
 		// default constructor
+		void Data_init();
 		Data();
 		Data( int pTaylorTerms, int pMosaicID, bool pWProjection, bool pAProjection, int pWPlanes, int pPBChannels,
 			bool pCacheData, int pStokes, int pStokesImages );
    
-		// destructor3703
+		// destructor
 		~Data();
 
 //
@@ -92,17 +93,27 @@ class Data
 		double * WPlaneMax;
 		int PBChannels;
 		int WPlanes;
+		
+		int MosaicID;
+		double * PBChannelWavelength;
 
 		// primary beams.
+		bool LoadedPrimaryBeam;		// true if the primary beam was loaded from file, or false if it was generated from a Gaussian or Airy disk.
 		float * AveragePrimaryBeamIn;		// this primary beam is based upon the average frequency in the file, and is centred in the image. it can be reprojected
 							// to any position and frequency required.
 		float * PrimaryBeam;			// this primary beam is used for mosaicing, and also for setting the image mask. it is in the reference frame of
 							//	the output phase position.
-		float * PrimaryBeamRatio;		// this primary beam is used for rescaling the dirty image to a primary beam that is common to all channels. we use
-							//	the maximum wavelength for this purpose.
 		float * PrimaryBeamInFrame;		// this primary beam is shown in the reference frame of each mosaic component (used for image-plane mosaicing).
 		
 		float * MuellerDeterminant;
+		
+		// Jones matrices.
+		cufftComplex ** JonesMatrixIn;
+		cufftComplex ** JonesMatrix;
+
+		// mueller matrix and inverse matrix.
+		cufftComplex ** MuellerMatrix;
+		cufftComplex ** InverseMuellerMatrix;
 
 		// mosaic component mask (only for image-plane mosaics).
 		bool * ComponentMask;
@@ -132,14 +143,6 @@ class Data
 		double PhaseToRA;
 		double PhaseToDEC;
 		
-		// Jones matrices.
-		cufftComplex ** JonesMatrixIn;
-		cufftComplex ** JonesMatrix;
-
-		// mueller matrix and inverse matrix.
-		cufftComplex ** MuellerMatrix;
-		cufftComplex ** InverseMuellerMatrix;
-		
 		// flags to record whether or not cells of the Mueller and inverse-Mueller matrices are populated or null. these flags are used during gridding to skip
 		// certain Stokes products.
 		bool * MuellerMatrixFlag;
@@ -153,7 +156,7 @@ class Data
 		void BuildComponentMask( float * pPrimaryBeamPattern, double pCellSize, double pOutputRA, double pOutputDEC, int pBeamSize );
 		void CacheData( int pBatchID, int pTaylorTerm, int pWhatData );
 		cufftDoubleComplex ** ConvertJonesToMueller( cufftComplex ** phstJonesMatrix, int pImageSize );
-		void CopyJonesMatrixIn( cufftComplex ** pFromMatrix );
+		void CopyJonesMatrixIn( cufftComplex ** pFromMatrix, int pBeams );
 		void Create( int pTaylorTerms, int pMosaicID, bool pWProjection, bool pAProjection, int pWPlanes, int pPBChannels,
 				bool pCacheData, int pStokes, int pStokesImages );
 		void DeleteCache();
@@ -163,14 +166,14 @@ class Data
 		void FreeOffAxisMuellerMatrices();
 		void FreeUnwantedMuellerMatrices( int pStokes );
 		void GenerateAveragePrimaryBeam( int pNumSpws, int * pNumChannels, bool ** pSpwChannelFlag, double ** pWavelength );
-		void GenerateMuellerMatrix( int pPBChannel, int pImageSize, float * pdevPrimaryBeam, float pPBMaxValue );
+		void GenerateMuellerMatrix( int pPBChannel, int pImageSize );
 		void PerformUniformWeighting( double ** phstTotalWeightPerCell );
 		void PerformRobustWeighting( double ** phstTotalWeightPerCell );
-		void ProcessMeasurementSet( int pFileIndex, double ** phstTotalWeightPerCell, vector<Data> & pData );
+		void ProcessMeasurementSet( int pFileIndex, double ** phstTotalWeightPerCell, vector<Data *> & pData );
 		void ReduceJonesMatrixChannels( int pNumSpws, int * pNumChannels, bool ** pSpwChannelFlag, int ** pWhichPBChannel );
 		void ReprojectJonesMatrix( int pPBChannel, int pBeamOutSize, double pBeamOutCellSize );
 		void ReprojectMuellerDeterminant( int pBeamOutSize, double pBeamOutCellSize, double pToRA, double pToDEC );
-		float * ReprojectPrimaryBeam( int pBeamOutSize, double pBeamOutCellSize, double pToRA, double pToDEC, double pToWavelength );
+		float * ReprojectPrimaryBeam( int pBeamOutSize, double pBeamOutCellSize, double pToRA, double pToDEC, double pToWavelength, bool pVerbose );
 		void ShrinkCache( long int pMaxMemory );
 		void SumWeights( double ** phstTotalWeightPerCell, int pStageID );
 		void UncacheData( int pBatchID, int pTaylorTerm, long int pOffset, int pWhatData, int pStokes );
@@ -195,7 +198,6 @@ class Data
 		bool _wProjection;
 		bool _aProjection;
 		bool _cacheData;
-		int _mosaicID;
 		int _stokes;
 		int _stokesImages;
 		int _taylorTerms;
@@ -210,27 +212,29 @@ class Data
 //
 //	FUNCTIONS
 
-		void addMosaicComponent( std::vector<Data> & pData );
+		void addMosaicComponent( std::vector<Data *> & pData );
 		cufftDoubleComplex ** calculateInverseImageMatrix( cufftDoubleComplex ** pdevMatrix, int pMatrixSize, int pImageSize, bool pDivideByDeterminant );
 		void calculateGridPositions( int pStageID, long int pPreferredVisibilityBatchSize, int pNumSpws, int pNumSamplesInStage, int pSampleStageID, int pTotalSamples,
 						int pOversample, double pUvCellSize, double ** phstWavelength, int * phstNumChannels, double * phstPhase,
 						int ** phstWhichPBChannel, int * phstSpw, float ** phstSampleWeight, int * phstSampleFieldID, VectorD * phstSample,
 						int pNumFields, int pNumGPUs, int * phstGPU );
-		void calculatePBChannels( int *** phstWhichPBChannel, double * phstPBChannelWavelength, double ** phstWavelength, int pNumSpws, int * phstNumChannels, bool ** phstSpwChannelFlag );
+		void calculatePBChannels( int *** phstWhichPBChannel, double ** phstWavelength, int pNumSpws, int * phstNumChannels, bool ** phstSpwChannelFlag );
 		void calculateVisibilityAndFlag( int pStageID, long int pPreferredVisibilityBatchSize, int pNumPolarisations, int pNumSamplesInStage,
-							int * phstPolarisationConfig, cufftComplex * phstVisibilityIn, bool * phstFlagIn, double ** pdevMultiplier );
+							int * phstPolarisationConfig, cufftComplex * phstVisibilityIn, bool * phstFlagIn, cufftDoubleComplex ** pdevMultiplier );
 		void calculateWPlanes( int pFieldID, int pCasaFieldID, int pNumSamples, VectorD * phstSample, int * phstFieldID, double pMinWavelength );
 		long int compactData( long int * pTotalVisibilities, long int pFirstVisibility, long int pNumVisibilitiesToProcess );
 		void compactFieldIDs( double ** pPhaseCentrePtr, double ** pPhaseCentreImagePtr, int * pNumFields, int * pFieldID, int ** pFieldIDMap, int pNumSamples );
 		cufftDoubleComplex * determinantImageMatrix( cufftDoubleComplex ** pdevMatrix, int pMatrixSize, int pImageSize );
 		void doPhaseCorrectionSamples( PhaseCorrection * pPhaseCorrection, int pNumSamples, double * pPhaseCentreIn, double * pPhaseCentreOut, VectorD * pSample, 
 					int * pFieldID, double * pPhase );
-		void generatePrimaryBeamAiry( cufftComplex ** phstJonesMatrix, double pWidth, double pCutout, int pNumSpws, int * phstNumChannels, double ** phstWavelength );
-		void generatePrimaryBeamGaussian( cufftComplex ** phstJonesMatrix, double pWidth, int pNumSpws, int * phstNumChannels, double ** phstWavelength );
+//		void generatePrimaryBeamAiry( cufftComplex ** phstJonesMatrix, double pWidth, double pCutout, int pNumSpws, int * phstNumChannels, double ** phstWavelength );
+//		void generatePrimaryBeamGaussian( cufftComplex ** phstJonesMatrix, double pWidth, int pNumSpws, int * phstNumChannels, double ** phstWavelength );
+		void generatePrimaryBeamAiry( double pWidth, double pCutout );
+		void generatePrimaryBeamGaussian( double pWidth );
 		void getASKAPBeamPosition( double * pRA, double * pDEC, double pXOffset, double pYOffset, double pCentreRA, double pCentreDEC );
 		double getPrimaryBeamWidth( float * phstBeam, int pBeamSize );
 		void getSuitablePhasePositionForBeam( double * pBeamIn, double * pPhase, int pNumBeams, double pBeamWidth );
-		double ** getPolarisationMultiplier( char * pMeasurementSetFilename, int * pNumPolarisations, int * pNumPolarisationConfigurations, char * pTableData );
+		cufftDoubleComplex ** getPolarisationMultiplier( char * pMeasurementSetFilename, int * pNumPolarisations, int * pNumPolarisationConfigurations, char * pTableData );
 		bool loadPrimaryBeam( char * pBeamFilename, cufftComplex ** phstPrimaryBeamIn, int pSize, int pNumChannels );
 		void mergeData( int pStageID_one, int pStageID_two, bool pLoadAllData, int pWhatData );
 		cufftDoubleComplex ** outerProductImageMatrix( cufftComplex ** pOne, cufftComplex ** pTwo, int pMatrixSize1, int pMatrixSize2, int pImageSize );

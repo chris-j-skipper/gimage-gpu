@@ -637,7 +637,7 @@ bool KernelSet::generateKernel
 		numberOfWorkspacesRequired++;
 
 	// if we are using uv-plane mosaicing then we need to correct the image for the primary beam, and weight the image for mosaicing.
-	cufftComplex * devBeamCorrection = NULL;
+	cufftComplex * devMosaicBeam = NULL;
 	if (doMosaicing == true)
 	{
 
@@ -650,20 +650,20 @@ bool KernelSet::generateKernel
 
 		// set the primary beam during gridding and degridding. we tell this subroutine if we're using A-projection or not because in the absence of A-projection
 		// we will need to correct for the primary beam function using same average beam that we use to weight the mosaic.
-		setThreadBlockSize2D( pBeamSize, pBeamSize, _gridSize2D, _blockSize2D );
-		devSetPrimaryBeamForGriddingAndDegridding<<< _gridSize2D, _blockSize2D >>>(	/* pImage = */ devPrimaryBeam,
-												/* pSize = */ pBeamSize,
-												/* pGridDegrid = */ pGridDegrid,
-												/* pAProjection = */ pAProjection );
+//		setThreadBlockSize2D( pBeamSize, pBeamSize, _gridSize2D, _blockSize2D );
+//		devSetPrimaryBeamForGriddingAndDegridding<<< _gridSize2D, _blockSize2D >>>(	/* pImage = */ devPrimaryBeam,
+//												/* pSize = */ pBeamSize,
+//												/* pGridDegrid = */ pGridDegrid,
+//												/* pAProjection = */ pAProjection );
 
 		// create the kernel and clear it.
-		reserveGPUMemory( (void **) &devBeamCorrection, WORKSPACE_SIZE * WORKSPACE_SIZE * sizeof( cufftComplex ),
+		reserveGPUMemory( (void **) &devMosaicBeam, WORKSPACE_SIZE * WORKSPACE_SIZE * sizeof( cufftComplex ),
 					"declaring device memory for the beam-correction kernel", __LINE__ );
-		zeroGPUMemory( (void *) devBeamCorrection, WORKSPACE_SIZE * WORKSPACE_SIZE * sizeof( cufftComplex ), "clearing beam-correction kernel on the device", __LINE__ );
+		zeroGPUMemory( (void *) devMosaicBeam, WORKSPACE_SIZE * WORKSPACE_SIZE * sizeof( cufftComplex ), "clearing beam-correction kernel on the device", __LINE__ );
 
 		// copy the kernel into the workspace.
 		setThreadBlockSize2D( WORKSPACE_SIZE, WORKSPACE_SIZE, _gridSize2D, _blockSize2D );
-		devScaleImage<<< _gridSize2D, _blockSize2D >>>(	/* pNewImage = */ devBeamCorrection,
+		devScaleImage<<< _gridSize2D, _blockSize2D >>>(	/* pNewImage = */ devMosaicBeam,
 									/* pOldImage = */ devPrimaryBeam,
 									/* pNewSize = */ WORKSPACE_SIZE,
 									/* pOldSize = */ pBeamSize,
@@ -673,16 +673,17 @@ bool KernelSet::generateKernel
 		if (devPrimaryBeam != NULL)
 			cudaFree( (void *) devPrimaryBeam );
 
+//if (phstData != NULL && pGridDegrid == DEGRID)
 //{
 
 //float * tmpKernel = (float *) malloc( WORKSPACE_SIZE * WORKSPACE_SIZE * sizeof( cufftComplex ) );
-//cudaMemcpy( tmpKernel, devBeamCorrection, WORKSPACE_SIZE * WORKSPACE_SIZE * sizeof( cufftComplex ), cudaMemcpyDeviceToHost );
+//cudaMemcpy( tmpKernel, devMosaicBeam, WORKSPACE_SIZE * WORKSPACE_SIZE * sizeof( cufftComplex ), cudaMemcpyDeviceToHost );
 //for ( long int i = 0; i < (long int) WORKSPACE_SIZE * (long int) WORKSPACE_SIZE; i++ )
 //	tmpKernel[ i ] = tmpKernel[ i * 2 ];
 //char kernelFilename[100];
-//sprintf( kernelFilename, "beam-correction-%i-%i", pMosaicID, (pGridDegrid == GRID ? 0 : 1) );
-//_hstCasacoreInterface.WriteCasaImage( kernelFilename, WORKSPACE_SIZE, WORKSPACE_SIZE, _hstOutputRA,
-//					_hstOutputDEC, _param.CellSize * (double) _param.Oversample, tmpKernel, CONST_C / phstData->AverageWavelength, NULL );
+//sprintf( kernelFilename, "mosaicing-m%i-c%i", phstData->MosaicID, pChannel );
+//_casacoreInterface->WriteCasaImage( kernelFilename, WORKSPACE_SIZE, WORKSPACE_SIZE, _param->OutputRA, _param->OutputDEC, _param->CellSize * (double) _param->Oversample,
+//					tmpKernel, CONST_C / phstData->AverageWavelength, NULL, CasacoreInterface::J2000, 1 );
 //free( tmpKernel );
 
 //}
@@ -862,7 +863,7 @@ bool KernelSet::generateKernel
 //{
 
 //float * tmpKernel = (float *) malloc( WORKSPACE_SIZE * WORKSPACE_SIZE * sizeof( cufftComplex ) );
-//cudaMemcpy( tmpKernel, devBeamCorrection, WORKSPACE_SIZE * WORKSPACE_SIZE * sizeof( cufftComplex ), cudaMemcpyDeviceToHost );
+//cudaMemcpy( tmpKernel, devMosaicBeam, WORKSPACE_SIZE * WORKSPACE_SIZE * sizeof( cufftComplex ), cudaMemcpyDeviceToHost );
 //for ( long int i = 0; i < (long int) WORKSPACE_SIZE * (long int) WORKSPACE_SIZE; i++ )
 //	tmpKernel[ i ] = tmpKernel[ i * 2 ];
 //char kernelFilename[100];
@@ -896,7 +897,7 @@ bool KernelSet::generateKernel
 	// are we using beam correction ? Convolve with the kernel.
 	if (doMosaicing == true)
 		devMultiplyArrays<<< _gridSize2D, _blockSize2D >>>(	/* pOne = */ devCombinedKernel,
-									/* pTwo = */ devBeamCorrection,
+									/* pTwo = */ devMosaicBeam,
 									/* pSize = */ WORKSPACE_SIZE,
 									/* pConjugate = */ false );
 									
@@ -912,14 +913,14 @@ bool KernelSet::generateKernel
 		cudaFree( (void *) devWKernel );
 	if (devAKernel != NULL)
 		cudaFree( (void *) devAKernel );
-	if (devBeamCorrection != NULL)
-		cudaFree( (void *) devBeamCorrection );
+	if (devMosaicBeam != NULL)
+		cudaFree( (void *) devMosaicBeam );
 	if (devFluxCorrection != NULL)
 		cudaFree( (void *) devFluxCorrection );
 	if (devAAKernel != NULL)
 		cudaFree( (void *) devAAKernel );
 
-//if (pW == 0 && pChannel % 5 == 0)
+//if (phstData != NULL && pGridDegrid == GRID)
 //{
 
 //float * tmpKernel = (float *) malloc( WORKSPACE_SIZE * WORKSPACE_SIZE * sizeof( cufftComplex ) );
@@ -927,7 +928,7 @@ bool KernelSet::generateKernel
 //for ( long int i = 0; i < (long int) WORKSPACE_SIZE * (long int) WORKSPACE_SIZE; i++ )
 //	tmpKernel[ i ] = tmpKernel[ i * 2 ];
 //char kernelFilename[100];
-//sprintf( kernelFilename, "combined-kernel-a%i-g%i", pChannel, (pGridDegrid == GRID ? 0 : 1) );
+//sprintf( kernelFilename, "combined-kernel-m%i-a%i", phstData->MosaicID, pChannel );
 //_casacoreInterface->WriteCasaImage( kernelFilename, WORKSPACE_SIZE, WORKSPACE_SIZE, 0.0,
 //					0.0, _param->CellSize * (double) oversample, tmpKernel, 1000.0, NULL, CasacoreInterface::J2000, 1 );
 //free( tmpKernel );
@@ -957,20 +958,56 @@ bool KernelSet::generateKernel
 			/* pIncludeComplexComponent = */ true,
 			/* pMultiplyByConjugate = */ false,
 			/* pdevMask = */ NULL );
+			
+//if (pGridDegrid == GRID)
+//	printf( "\nGR: " );
+//else
+//	printf( "\nDG CH %i: ", pChannel );
+//supportSize = findSupportForKernel( devCombinedKernel, WORKSPACE_SIZE, devMaxValue, 0.001, 2000 );
+//printf( "0.001 (%i), ", (int) ceil( (double) supportSize / (double) oversample ) );
+//supportSize = findSupportForKernel( devCombinedKernel, WORKSPACE_SIZE, devMaxValue, 0.002, 2000 );
+//printf( "0.002 (%i), ", (int) ceil( (double) supportSize / (double) oversample ) );
+//supportSize = findSupportForKernel( devCombinedKernel, WORKSPACE_SIZE, devMaxValue, 0.005, 2000 );
+//printf( "0.005 (%i), ", (int) ceil( (double) supportSize / (double) oversample ) );
+//supportSize = findSupportForKernel( devCombinedKernel, WORKSPACE_SIZE, devMaxValue, 0.01, 2000 );
+//printf( "0.01 (%i), ", (int) ceil( (double) supportSize / (double) oversample ) );
+//supportSize = findSupportForKernel( devCombinedKernel, WORKSPACE_SIZE, devMaxValue, 0.02, 2000 );
+//printf( "0.02 (%i), ", (int) ceil( (double) supportSize / (double) oversample ) );
+//supportSize = findSupportForKernel( devCombinedKernel, WORKSPACE_SIZE, devMaxValue, 0.05, 2000 );
+//printf( "0.05 (%i), ", (int) ceil( (double) supportSize / (double) oversample ) );
+//supportSize = findSupportForKernel( devCombinedKernel, WORKSPACE_SIZE, devMaxValue, 0.1, 2000 );
+//printf( "0.1 (%i)", (int) ceil( (double) supportSize / (double) oversample ) );
+
+	// try various kernel cutoffs until we have a reasonable support size. there's a cliff edge in here somewhere, which we want to just avoid falling off.
+	double cutoffFraction[] = { 0.001, 0.002, 0.005, 0.01, 0.02, 0.05, 0.1, 0.2 };
+	for ( int cutoff = 0; cutoff < 8; cutoff++ )
+	{
+						
+		// build a histogram of support sizes for all the pixels above the threshold value. we use this histogram to determine an appropriate support size.
+		supportSize = findSupportForKernel(	/* pdevKernel = */ devCombinedKernel,
+							/* pSize = */ WORKSPACE_SIZE,
+							/* pdevMaxValue = */ devMaxValue,
+							/* pCutoffFraction = */ cutoffFraction[ cutoff ],
+							/* pMaxSupport = */ _param->KernelCutoffSupport * oversample );
+		if (supportSize <= _param->KernelCutoffSupport * oversample)
+			break;
+		
+	}
 						
 	// build a histogram of support sizes for all the pixels above the threshold value. we use this histogram to determine an appropriate support size.
-	supportSize = findSupportForKernel(	/* pdevKernel = */ devCombinedKernel,
-						/* pSize = */ WORKSPACE_SIZE,
-						/* pdevMaxValue = */ devMaxValue,
-						/* pCutoffFraction = */ _param->KernelCutoffFraction,
-						/* pMaxSupport = */ _param->KernelCutoffSupport * oversample );
-
+//	supportSize = findSupportForKernel(	/* pdevKernel = */ devCombinedKernel,
+//						/* pSize = */ WORKSPACE_SIZE,
+//						/* pdevMaxValue = */ devMaxValue,
+//						/* pCutoffFraction = */ _param->KernelCutoffFraction,
+//						/* pMaxSupport = */ _param->KernelCutoffSupport * oversample );
+						
 	// free memory.
 	if (devMaxValue != NULL)
 		cudaFree( (void *) devMaxValue );
 
 	// divide the support size by the oversampling factor, and round up.
 	supportSize = (int) ceil( (double) supportSize / (double) oversample );
+//printf( " - using %i\n", supportSize );
 
 	// ensure the support is at least 5.
 	if (supportSize < 5)
@@ -986,7 +1023,7 @@ bool KernelSet::generateKernel
 	// calculate kernel size.
 	kernelSize = (supportSize * 2) + 1;
 
-//if (doFluxCorrection == true)
+//if (phstData != NULL)
 //{
 
 //float * tmpKernel = (float *) malloc( WORKSPACE_SIZE * WORKSPACE_SIZE * sizeof( cufftComplex ) );
@@ -994,7 +1031,7 @@ bool KernelSet::generateKernel
 //for ( long int i = 0; i < (long int) WORKSPACE_SIZE * (long int) WORKSPACE_SIZE; i++ )
 //	tmpKernel[ i ] = sqrt( pow( tmpKernel[ i * 2 ], 2 ) + pow( tmpKernel[ (i * 2) + 1 ], 2 ) );
 //char kernelFilename[100];
-//sprintf( kernelFilename, "kernel-%i", pChannel );
+//sprintf( kernelFilename, "kernel-%i", phstData->MosaicID );
 //_casacoreInterface->WriteCasaImage( kernelFilename, WORKSPACE_SIZE, WORKSPACE_SIZE, 0.0,
 //					0.0, _param->CellSize, tmpKernel, 1000.0, NULL, CasacoreInterface::J2000, 1 );
 //free( tmpKernel );
@@ -1070,6 +1107,8 @@ bool KernelSet::generateKernel
 
 	// cache the kernel.
 	kernel = (cufftComplex *) malloc( kernelSize * kernelSize * oversample * oversample * sizeof( cufftComplex ) );
+if (kernel == NULL)
+	printf( "%d (cuKS) - kernel is null (kernelSize %i)\n", __LINE__, kernelSize );
 	moveDeviceToHost( (void *) kernel, (void *) devKernel, kernelSize * kernelSize * oversample * oversample * sizeof( cufftComplex ),
 				"copying kernel from cache to device", __LINE__ );
 	
