@@ -86,9 +86,10 @@ const int STOKES_NONE = 4;
 const int STOKES_ALL = 5;
 
 // the size of the data area required by the routine to find the maximum pixel value.
-const int MAX_PIXEL_DATA_AREA_SIZE = 5;
+const int MAX_PIXEL_DATA_AREA_SIZE = 6;
 const int MAX_PIXEL_VALUE = 0;
 const int MAX_PIXEL_X = 1;
 const int MAX_PIXEL_Y = 2;
 const int MAX_PIXEL_REAL = 3;
 const int MAX_PIXEL_IMAG = 4;
+const int MAX_PIXEL_IMAGE = 5;
